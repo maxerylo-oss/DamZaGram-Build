@@ -20,7 +20,6 @@
 #include "data/data_session.h"
 #include "data/data_star_gift.h"
 #include "history/view/controls/history_view_suggest_options.h"
-#include "lang/lang_tag.h"
 #include "main/main_session.h"
 #include "ui/layers/box_content.h"
 #include "ui/layers/generic_box.h"
@@ -32,6 +31,21 @@ namespace {
 // Plugin ids that registered a gift-offer handler.
 base::flat_set<QString> Intercepting;
 
+// A plain, locale-independent decimal for the bot command: '2600', '2.5'.
+// Never a thousands separator (a space would split the command argument).
+[[nodiscard]] QString PlainAmount(CreditsAmount price) {
+	const auto whole = QString::number(price.whole());
+	const auto nano = price.nano();
+	if (!nano) {
+		return whole;
+	}
+	auto frac = QString::number(nano).rightJustified(9, '0');
+	while (frac.endsWith('0')) {
+		frac.chop(1);
+	}
+	return whole + '.' + frac;
+}
+
 [[nodiscard]] QVariantMap OfferPayload(
 		not_null<Data::UniqueGift*> unique,
 		not_null<PeerData*> owner,
@@ -41,7 +55,7 @@ base::flat_set<QString> Intercepting;
 		{ u"slug"_q, unique->slug },
 		{ u"link"_q, u"https://t.me/nft/"_q + unique->slug },
 		{ u"title"_q, Data::UniqueGiftName(*unique) },
-		{ u"amount"_q, Lang::FormatCreditsAmountDecimal(price) },
+		{ u"amount"_q, PlainAmount(price) },
 		{ u"amountNumber"_q, price.value() },
 		{ u"currency"_q, price.ton() ? u"ton"_q : u"stars"_q },
 		{ u"duration"_q, options.offerDuration },
