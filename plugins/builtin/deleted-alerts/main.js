@@ -4,6 +4,13 @@
 // Автор: @wetakush
 
 const BURST_MS = 1200;
+// Поток удалений (очистка истории, чистка группы) может идти без пауз:
+// уведомление всё равно приходит не позже чем через столько.
+const MAX_WAIT_MS = 5000;
+// Больше чатов в одной пачке — одно общее уведомление вместо россыпи.
+const MAX_SEPARATE = 3;
+// Журнал пишется на диск не чаще раза в столько, а не на каждое удаление.
+const SAVE_MS = 1000;
 const LOG_KEY = 'log';
 
 const setting = (key, fallback) => {
@@ -38,25 +45,57 @@ const cut = (text, n) => (text.length > n ? text.slice(0, n - 1) + '…' : text)
 
 export function shouldTrack(message) {
   if (!message || message.service) return false;
+  // Одно чтение настроек на событие: в пачке их тысячи.
+  const all = dzg.settings.all() || {};
+  const on = (key, fallback) => {
+    const value = all[key];
+    return (value === undefined || value === null || value === '') ? fallback : !!value;
+  };
   const type = message.chat && message.chat.type;
-  if (setting('ignoreOwn', true) && message.out) return false;
-  if (setting('ignoreBots', true) && type === 'bot') return false;
-  if (type === 'channel' && !setting('includeChannels', false)) return false;
-  if (setting('onlyPrivate', true) && type !== 'user' && type !== 'bot') return false;
+  if (on('ignoreOwn', true) && message.out) return false;
+  if (on('ignoreBots', true) && type === 'bot') return false;
+  if (type === 'channel' && !on('includeChannels', false)) return false;
+  if (on('onlyPrivate', true) && type !== 'user' && type !== 'bot') return false;
   return true;
 }
 
 // --- Журнал ---------------------------------------------------------------
 
-function readLog() {
+let unsaved = [];
+let saveTimer = 0;
+
+const logSize = () => Math.max(10, Math.min(5000, Number(setting('logSize', 300)) || 300));
+
+function storedLog() {
   const log = dzg.storage.get(LOG_KEY, []);
   return Array.isArray(log) ? log : [];
 }
 
-function appendLog(entries) {
-  const size = Math.max(10, Math.min(5000, Number(setting('logSize', 300)) || 300));
-  const log = readLog().concat(entries);
-  dzg.storage.set(LOG_KEY, log.slice(-size));
+function readLog() {
+  return unsaved.length ? storedLog().concat(unsaved).slice(-logSize()) : storedLog();
+}
+
+function saveLog() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  if (!unsaved.length) return;
+  const log = storedLog().concat(unsaved).slice(-logSize());
+  unsaved = [];
+  dzg.storage.set(LOG_KEY, log);
+}
+
+// Пачка удалений — это сотни событий подряд: копим их в памяти и пишем
+// журнал (и перерисовываем панель) раз в SAVE_MS.
+function appendLog(entry) {
+  unsaved.push(entry);
+  // Больше, чем журнал может вместить (logSize до 5000), не держим.
+  if (unsaved.length > 10000) unsaved = unsaved.slice(-5000);
+  if (!saveTimer) {
+    saveTimer = setTimeout(() => {
+      saveLog();
+      if (panel && panel.isOpen()) render();
+    }, SAVE_MS);
+  }
 }
 
 function entryOf(message) {
@@ -74,52 +113,73 @@ function entryOf(message) {
 
 // --- Уведомления ----------------------------------------------------------
 
-const pending = new Map(); // peerId -> { entries, timer }
+// peerId -> { count, preview: первые 3 записи, authors }: в памяти держим
+// только то, что попадёт в уведомление, сколько бы ни удалили.
+const pending = new Map();
+let flushTimer = 0;
+let firstPendingAt = 0;
 
-function notify(title, text, entry) {
-  const open = () => dzg.chats.open(entry.peerId, entry.id);
+function notify(title, text, onClick) {
   if (setting('systemNotify', true) && dzg.ui.notify) {
-    dzg.ui.notify({ title, text, onClick: open, silent: !!setting('silent', true) });
+    dzg.ui.notify({ title, text, onClick, silent: !!setting('silent', true) });
   } else {
     dzg.ui.toast(text, title);
   }
 }
 
-function flush(peerId) {
-  const batch = pending.get(peerId);
-  pending.delete(peerId);
-  if (!batch || !batch.entries.length) return;
-  const entries = batch.entries;
-  const first = entries[0];
-  if (entries.length === 1) {
+function notifyChat(batch) {
+  const first = batch.preview[0];
+  const open = () => dzg.chats.open(first.peerId, first.id);
+  if (batch.count === 1) {
     const where = first.chatType === 'user' || first.chatType === 'bot'
       ? first.fromName || first.chatName
       : first.fromName + ' в «' + first.chatName + '»';
-    notify('🗑 ' + where + ' удалил(а) сообщение', cut(first.text, 300), first);
+    notify('🗑 ' + where + ' удалил(а) сообщение', cut(first.text, 300), open);
     return;
   }
-  const authors = Array.from(new Set(entries.map((e) => e.fromName).filter(Boolean)));
-  const preview = entries.slice(0, 3).map((e) => '• ' + cut(e.text, 80)).join('\n');
+  const authors = Array.from(batch.authors);
+  const preview = batch.preview.map((e) => '• ' + cut(e.text, 80)).join('\n');
   notify(
-    '🗑 Удалено ' + entries.length + ' сообщ. в «' + first.chatName + '»',
+    '🗑 Удалено ' + batch.count + ' сообщ. в «' + first.chatName + '»',
     (authors.length ? 'От: ' + authors.slice(0, 3).join(', ') + (authors.length > 3 ? '…' : '') + '\n' : '') + preview,
-    first);
+    open);
+}
+
+function flush() {
+  clearTimeout(flushTimer);
+  flushTimer = 0;
+  firstPendingAt = 0;
+  const batches = Array.from(pending.values());
+  pending.clear();
+  if (batches.length > MAX_SEPARATE) {
+    const total = batches.reduce((sum, b) => sum + b.count, 0);
+    const chats = batches.slice(0, 3).map((b) => '«' + b.preview[0].chatName + '» — ' + b.count).join('\n');
+    notify(
+      '🗑 Удалено ' + total + ' сообщ. в ' + batches.length + ' чатах',
+      chats + (batches.length > 3 ? '\n…' : ''),
+      () => show(null));
+    return;
+  }
+  for (const batch of batches) notifyChat(batch);
 }
 
 dzg.on('message.deleted', (message) => {
   if (!shouldTrack(message)) return;
   const entry = entryOf(message);
-  appendLog([entry]);
+  appendLog(entry);
   const key = String(entry.peerId);
   let batch = pending.get(key);
   if (!batch) {
-    batch = { entries: [], timer: 0 };
+    batch = { count: 0, preview: [], authors: new Set() };
     pending.set(key, batch);
   }
-  batch.entries.push(entry);
-  clearTimeout(batch.timer);
-  batch.timer = setTimeout(() => flush(key), BURST_MS);
-  if (panel && panel.isOpen()) render();
+  batch.count++;
+  if (batch.preview.length < 3) batch.preview.push(entry);
+  if (entry.fromName && batch.authors.size < 10) batch.authors.add(entry.fromName);
+  const now = Date.now();
+  if (!firstPendingAt) firstPendingAt = now;
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flush, Math.max(0, Math.min(BURST_MS, firstPendingAt + MAX_WAIT_MS - now)));
 });
 
 // --- Панель журнала -------------------------------------------------------
@@ -181,6 +241,9 @@ function exportLog() {
 async function clearLog() {
   const ok = await dzg.ui.confirm('Очистить журнал удалённых сообщений?', { confirmText: 'Очистить', cancelText: 'Отмена' });
   if (!ok) return;
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  unsaved = [];
   dzg.storage.set(LOG_KEY, []);
   render();
 }
@@ -206,6 +269,7 @@ dzg.ui.addChatMenuItem({
 });
 
 dzg.on('unload', () => {
-  for (const key of Array.from(pending.keys())) flush(key);
+  saveLog();
+  flush();
   if (panel) panel.close();
 });

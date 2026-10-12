@@ -56,8 +56,7 @@ export function fuzzyScore(query, target) {
   return score - t.length * 0.2;
 }
 
-function bestScore(query, fields) {
-  const alternative = switchLayout(query);
+function bestScore(query, fields, alternative) {
   let best = -1;
   for (const field of fields) {
     if (!field) continue;
@@ -71,8 +70,8 @@ function bestScore(query, fields) {
 
 const RECENT_KEY = 'recent';
 
-function usageBoost(key) {
-  const entry = dzg.storage.get(RECENT_KEY, {})[key];
+function usageBoost(recent, key) {
+  const entry = recent[key];
   if (!entry) return 0;
   const days = (Date.now() - entry.last) / 86400000;
   return Math.min(entry.count, 20) * 6 + Math.max(0, 60 - days * 10);
@@ -387,12 +386,15 @@ export function search(query, sources) {
   if (kinds.command && setting('showCommands', true)) items.push(...sources.commands());
   if (kinds.action && setting('showActions', true)) items.push(...sources.actions(), ...(sources.plugins ? sources.plugins() : []));
 
+  // Сотни элементов на каждое нажатие клавиши: хранилище читаем один раз.
+  const recent = dzg.storage.get(RECENT_KEY, {}) || {};
+  const alternative = switchLayout(text);
   const scored = [];
   for (const item of items) {
-    const base = text ? bestScore(text, item.fields) : 0;
+    const base = text ? bestScore(text, item.fields, alternative) : 0;
     if (base < 0) continue;
     const kindBias = text ? 0 : (item.kind === 'chat' ? 5 : 0);
-    scored.push({ item, score: base + item.boost + usageBoost(item.key) + kindBias });
+    scored.push({ item, score: base + item.boost + usageBoost(recent, item.key) + kindBias });
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit).map((s) => s.item);
@@ -507,18 +509,40 @@ export function close() {
 
 // --- Регистрация ----------------------------------------------------------
 
-let removeShortcut = null;
+/**
+ * Та же клавиша в русской раскладке: при ней клиент получает не K, а Л,
+ * и Ctrl+Shift+K без второй привязки не сработал бы. "Ctrl+Shift+K" →
+ * "Ctrl+Shift+Л"; null, если у клавиши нет кириллической пары.
+ */
+export function layoutAlternative(keys) {
+  const m = /^(.*\+)?([^+])$/.exec(String(keys || '').trim());
+  if (!m) return null;
+  const mapped = EN_TO_RU.get(m[2].toLowerCase());
+  if (!mapped || !/^[а-яё]$/i.test(mapped)) return null;
+  return (m[1] || '') + mapped.toUpperCase();
+}
+
+let removeShortcuts = [];
 
 function bindShortcut() {
-  if (removeShortcut) removeShortcut();
-  removeShortcut = null;
+  for (const remove of removeShortcuts) remove();
+  removeShortcuts = [];
   if (!dzg.ui.addShortcut) return;
   const keys = String(setting('shortcut', 'Ctrl+Shift+K')).trim();
   if (!keys) return;
   try {
-    removeShortcut = dzg.ui.addShortcut(keys, open);
+    removeShortcuts.push(dzg.ui.addShortcut(keys, open));
   } catch (e) {
     dzg.ui.toast('Не получилось назначить «' + keys + '»: ' + (e && e.message ? e.message : e), 'Командная палитра');
+    return;
+  }
+  const alternative = layoutAlternative(keys);
+  if (alternative) {
+    try {
+      removeShortcuts.push(dzg.ui.addShortcut(alternative, open));
+    } catch (e) {
+      // Не вышло — останется основная клавиша.
+    }
   }
 }
 

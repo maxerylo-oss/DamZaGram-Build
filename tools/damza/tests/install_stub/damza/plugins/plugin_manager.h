@@ -65,6 +65,7 @@ public:
 			list.push_back(state);
 		}
 	}
+	void refresh() { rescan(); }
 	void reload(const QString &) { ++reloads; rescan(); }
 	void setEnabled(const QString &id, bool value) {
 		enabled[id] = value;

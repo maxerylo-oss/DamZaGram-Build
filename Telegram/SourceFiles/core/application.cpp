@@ -263,6 +263,9 @@ void Application::closeAdditionalWindows() {
 }
 
 Application::~Application() {
+	// DamZaGram: plugin "unload" handlers still need windows and sessions.
+	Damza::Plugins::Shutdown();
+
 	if (_savedWindows) {
 		_savedWindows->writeNow();
 	}

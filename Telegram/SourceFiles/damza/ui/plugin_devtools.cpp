@@ -34,6 +34,7 @@ using namespace Damza::Plugins;
 
 constexpr auto kLogRefresh = crl::time(400);
 constexpr auto kLogTailLines = 200;
+constexpr auto kLogLineLimit = 4096;
 constexpr auto kMaxEntries = 200;
 
 [[nodiscard]] QString JsString(const QString &text) {
@@ -82,6 +83,7 @@ private:
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	std::vector<QString> _history;
 	int _logSize = -1;
+	bool _logHasPlugin = false;
 	QString _logFirst;
 	QString _logLast;
 	int _entries = 0;
@@ -207,6 +209,7 @@ not_null<Ui::RoundButton*> DevTools::makeButton(
 }
 
 void DevTools::setPlugin(const QString &id) {
+	const auto was = _pluginId;
 	_pluginId = id;
 	if (_pluginId.isEmpty() && Manager::Exists()) {
 		const auto ids = Manager::Get().loadedIds();
@@ -225,7 +228,9 @@ void DevTools::setPlugin(const QString &id) {
 			" (не загружен)")) + u" ▾"_q;
 	_logTitle->setText(Damza::Text("Log", "Лог")
 		+ (_pluginId.isEmpty() ? QString() : u": "_q + _pluginId));
-	refreshLog(true);
+	// pluginsChanges() fires on every reported error: re-lay out the log
+	// only when it really changed.
+	refreshLog(_pluginId != was || _logSize < 0);
 }
 
 void DevTools::focusInput() {
@@ -355,20 +360,31 @@ void DevTools::refreshLog(bool force) {
 	const auto lines = plugin ? plugin->logLines() : QStringList();
 	const auto first = lines.isEmpty() ? QString() : lines.front();
 	const auto last = lines.isEmpty() ? QString() : lines.back();
+	// The placeholder depends on the plugin being loaded, even when the
+	// log is empty both times.
 	if (!force
+		&& (plugin != nullptr) == _logHasPlugin
 		&& lines.size() == _logSize
 		&& first == _logFirst
 		&& last == _logLast) {
 		return;
 	}
+	_logHasPlugin = (plugin != nullptr);
 	_logSize = lines.size();
 	_logFirst = first;
 	_logLast = last;
 	const auto atBottom = (_logScroll->scrollTop() + _logScroll->height()
 		>= _log->height() - st::lineWidth * 4);
-	const auto tail = (lines.size() > kLogTailLines)
+	auto tail = (lines.size() > kLogTailLines)
 		? lines.mid(lines.size() - kLogTailLines)
 		: lines;
+	// Laid out again on every new line: a huge console.log() would hang
+	// the UI each refresh.
+	for (auto &line : tail) {
+		if (line.size() > kLogLineLimit) {
+			line = line.left(kLogLineLimit) + u"…"_q;
+		}
+	}
 	_log->setMarkedText(tail.isEmpty()
 		? TextWithEntities{ plugin
 			? Damza::Text("The log is empty.", "Лог пуст.")

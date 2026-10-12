@@ -92,16 +92,23 @@ export function match(message) {
   const text = String(message.text || '');
   if (!text) return null;
   const type = message.chat ? message.chat.type : '';
-  const peerId = String(message.peerId || (message.chat && message.chat.id) || '');
   if (cfg.ignoreOwn && message.out) return null;
   if (cfg.onlyGroups && type !== 'group' && type !== 'channel') return null;
-  if (excluded().includes(peerId)) return null;
-  if (!cfg.includeMuted && isMuted(peerId)) return null;
+  let hit = null;
   for (const p of patterns) {
     const m = p.re.exec(text);
-    if (m) return { pattern: p.label, found: m[0], index: m.index };
+    if (m) {
+      hit = { pattern: p.label, found: m[0], index: m.index };
+      break;
+    }
   }
-  return null;
+  if (!hit) return null;
+  // Это вызывается на каждое сообщение: обращения к хранилищу и списку
+  // чатов — только для совпавших.
+  const peerId = String(message.peerId || (message.chat && message.chat.id) || '');
+  if (excluded().includes(peerId)) return null;
+  if (!cfg.includeMuted && isMuted(peerId)) return null;
+  return hit;
 }
 
 export function snippet(text, index, length) {

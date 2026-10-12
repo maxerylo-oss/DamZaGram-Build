@@ -10,6 +10,9 @@ namespace Damza::Plugins::Builtin {
 struct File {
 	const char *path = nullptr; // "<plugin id>/<path inside the plugin>"
 	const char *const *chunks = nullptr;
+	// Byte sizes of the chunks for binary files (they may contain zero
+	// bytes), nullptr for text files.
+	const int *sizes = nullptr;
 };
 
 // Generated from plugins/builtin/ by tools/damza/embed_builtins.py.

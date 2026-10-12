@@ -136,6 +136,14 @@ function describeError(status, data) {
   }
 }
 
+// Ключ не должен попасть в панель или лог, даже если прокси вернёт его
+// в тексте ошибки.
+export function redact(text) {
+  const key = String(setting('apiKey', '')).trim();
+  const value = String(text);
+  return key.length >= 8 ? value.split(key).join('sk-ant-…') : value;
+}
+
 export async function callClaude(request) {
   const apiKey = String(setting('apiKey', '')).trim();
   const endpoint = String(setting('endpoint', DEFAULT_ENDPOINT)).trim() || DEFAULT_ENDPOINT;
@@ -234,7 +242,8 @@ function showKeyRequest(chat, count) {
   });
   p.addButton('Сохранить и сделать дайджест', () => saveKey(input.text(), chat, count));
   p.addButton('Открыть console.anthropic.com', () => dzg.openUrl(KEYS_URL), { style: 'light' });
-  p.addLabel('Ключ хранится только локально, в tdata/plugins_data. Запросы идут напрямую в API Anthropic.', { muted: true });
+)DZGB",
+R"DZGB(  p.addLabel('Ключ хранится только локально, в tdata/plugins_data. Запросы идут напрямую в API Anthropic.', { muted: true });
 }
 
 function saveKey(value, chat, count) {
@@ -247,8 +256,7 @@ function saveKey(value, chat, count) {
   digest(chat, count);
 }
 
-)DZGB",
-R"DZGB(function renderDigest(p, chat, result, messages) {
+function renderDigest(p, chat, result, messages) {
   p.clear();
   p.setTitle('✨ ' + chat.name);
   const first = messages[0];
@@ -324,7 +332,7 @@ export async function digest(chat, count) {
     if (!panel) return;
     panel.clear();
     panel.addLabel('Не получилось сделать дайджест', { bold: true });
-    panel.addLabel(String(e && e.message ? e.message : e), { muted: true });
+    panel.addLabel(redact(e && e.message ? e.message : e), { muted: true });
     panel.addButton('Повторить', () => digest(chat, wanted));
     panel.addButton('Открыть настройки ключа', () => showKeyRequest(chat, wanted), { style: 'light' });
   } finally {
@@ -382,7 +390,7 @@ const char *const kFile1[] = {
 R"DZGB({
   "id": "ai-digest",
   "name": "ИИ-дайджест «Что я пропустил»",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Кнопка ✨ в шапке чата, пункт меню и /digest: Claude пересказывает последние сообщения чата — темы, решения, вопросы к тебе — со ссылками на сообщения. Нужен ключ Anthropic API.",
@@ -724,6 +732,10 @@ const STATE_KEY = 'state';
 const REPLIED_KEY = 'replied';
 const MAX_AGE_SECONDS = 120;
 const ECHO_MS = 30 * 1000;
+// Меньше минуты нельзя: два автоответчика иначе отвечали бы друг другу без конца.
+const MIN_COOLDOWN_MINUTES = 1;
+// Служебные аккаунты Telegram: уведомления и коды входа, «Ответы».
+const SERVICE_USERS = new Set([777000, 42777, 489000, 1271266957]);
 
 const setting = (key, fallback) => {
   const value = dzg.settings.get(key);
@@ -821,6 +833,20 @@ function isEcho(message) {
   return sentRecently.some((s) => s.peerId === peerId && s.text.trim() === String(message.text || '').trim());
 }
 
+// message.new приходит от всех аккаунтов клиента, а dzg.messages.send
+// отправляет от активного: отвечаем, только если сообщение пришло в него.
+function inActiveAccount(m) {
+  let accounts = [];
+  try {
+    accounts = (dzg.accounts && dzg.accounts.list && dzg.accounts.list()) || [];
+  } catch (e) {
+    accounts = [];
+  }
+  if (accounts.length <= 1) return true;
+  const own = dzg.messages.get(m.peerId || m.chat.id, m.id);
+  return !!own && own.date === m.date && String(own.text || '') === String(m.text || '');
+}
+
 function onMessage(m) {
   if (!m || m.service || !m.chat) return;
   if (m.out) {
@@ -828,19 +854,29 @@ function onMessage(m) {
     if (state().on && setting('autoOff', true)) turnOff('Ты снова пишешь — автоответчик выключен');
     return;
   }
-  if (m.chat.type !== 'user' || m.chat.isSelf) return;
+  if (m.chat.type !== 'user' || m.chat.isSelf || SERVICE_USERS.has(Number(m.chat.tgId))) return;
   if (m.date && Date.now() / 1000 - m.date > MAX_AGE_SECONDS) return;
   if (!isAway()) return;
   const peerId = String(m.peerId || m.chat.id);
   if (setting('onlyContacts', false) && !isContact(peerId)) return;
+  if (!inActiveAccount(m)) return;
 
-  const cooldown = Math.max(0, Number(setting('cooldownMinutes', 60)) || 0) * 60 * 1000;
+  const minutes = Math.max(MIN_COOLDOWN_MINUTES, Number(setting('cooldownMinutes', 60)) || 0);
+  const cooldown = minutes * 60 * 1000;
   const replied = dzg.storage.get(REPLIED_KEY, {}) || {};
   if (replied[peerId] && Date.now() - replied[peerId] < cooldown) return;
 
   const text = replyText(m);
-  if (!dzg.messages.send(peerId, text, { replyTo: m.id })) return;
-  sentRecently.push({ peerId, text, at: Date.now() });
+  // send() сразу добавляет ответ в историю, и message.new о нём приходит
+  // ещё до возврата: запоминаем ответ заранее, иначе он сочтётся тем,
+  // что пользователь сам написал, и выключит автоответчик.
+  const echo = { peerId, text, at: Date.now() };
+  sentRecently.push(echo);
+  if (!dzg.messages.send(peerId, text, { replyTo: m.id })) {
+    const index = sentRecently.indexOf(echo);
+    if (index >= 0) sentRecently.splice(index, 1);
+    return;
+  }
   replied[peerId] = Date.now();
   // Не копим старые записи.
   for (const key of Object.keys(replied)) {
@@ -914,7 +950,7 @@ const char *const kFile5[] = {
 R"DZGB({
   "id": "auto-reply",
   "name": "Автоответчик",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "enabledByDefault": false,
@@ -1381,8 +1417,7 @@ export function fuzzyScore(query, target) {
   return score - t.length * 0.2;
 }
 
-function bestScore(query, fields) {
-  const alternative = switchLayout(query);
+function bestScore(query, fields, alternative) {
   let best = -1;
   for (const field of fields) {
     if (!field) continue;
@@ -1396,8 +1431,8 @@ function bestScore(query, fields) {
 
 const RECENT_KEY = 'recent';
 
-function usageBoost(key) {
-  const entry = dzg.storage.get(RECENT_KEY, {})[key];
+function usageBoost(recent, key) {
+  const entry = recent[key];
   if (!entry) return 0;
   const days = (Date.now() - entry.last) / 86400000;
   return Math.min(entry.count, 20) * 6 + Math.max(0, 60 - days * 10);
@@ -1587,9 +1622,9 @@ function actionItems() {
       {
         id: 'archive',
         icon: entry && entry.archived ? 'unarchive' : 'archive',
+        title: (entry && entry.archived ? 'Вернуть из архива «' : 'В архив «') + chat.name + '»',
 )DZGB",
-R"DZGB(        title: (entry && entry.archived ? 'Вернуть из архива «' : 'В архив «') + chat.name + '»',
-        keywords: 'archive архив архивировать',
+R"DZGB(        keywords: 'archive архив архивировать',
         run: () => dzg.chats.archive(chat.id, !(entry && entry.archived)),
       },
       {
@@ -1713,12 +1748,15 @@ export function search(query, sources) {
   if (kinds.command && setting('showCommands', true)) items.push(...sources.commands());
   if (kinds.action && setting('showActions', true)) items.push(...sources.actions(), ...(sources.plugins ? sources.plugins() : []));
 
+  // Сотни элементов на каждое нажатие клавиши: хранилище читаем один раз.
+  const recent = dzg.storage.get(RECENT_KEY, {}) || {};
+  const alternative = switchLayout(text);
   const scored = [];
   for (const item of items) {
-    const base = text ? bestScore(text, item.fields) : 0;
+    const base = text ? bestScore(text, item.fields, alternative) : 0;
     if (base < 0) continue;
     const kindBias = text ? 0 : (item.kind === 'chat' ? 5 : 0);
-    scored.push({ item, score: base + item.boost + usageBoost(item.key) + kindBias });
+    scored.push({ item, score: base + item.boost + usageBoost(recent, item.key) + kindBias });
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit).map((s) => s.item);
@@ -1833,18 +1871,40 @@ export function close() {
 
 // --- Регистрация ----------------------------------------------------------
 
-let removeShortcut = null;
+/**
+ * Та же клавиша в русской раскладке: при ней клиент получает не K, а Л,
+ * и Ctrl+Shift+K без второй привязки не сработал бы. "Ctrl+Shift+K" →
+ * "Ctrl+Shift+Л"; null, если у клавиши нет кириллической пары.
+ */
+export function layoutAlternative(keys) {
+  const m = /^(.*\+)?([^+])$/.exec(String(keys || '').trim());
+  if (!m) return null;
+  const mapped = EN_TO_RU.get(m[2].toLowerCase());
+  if (!mapped || !/^[а-яё]$/i.test(mapped)) return null;
+  return (m[1] || '') + mapped.toUpperCase();
+}
+
+let removeShortcuts = [];
 
 function bindShortcut() {
-  if (removeShortcut) removeShortcut();
-  removeShortcut = null;
+  for (const remove of removeShortcuts) remove();
+  removeShortcuts = [];
   if (!dzg.ui.addShortcut) return;
   const keys = String(setting('shortcut', 'Ctrl+Shift+K')).trim();
   if (!keys) return;
   try {
-    removeShortcut = dzg.ui.addShortcut(keys, open);
+    removeShortcuts.push(dzg.ui.addShortcut(keys, open));
   } catch (e) {
     dzg.ui.toast('Не получилось назначить «' + keys + '»: ' + (e && e.message ? e.message : e), 'Командная палитра');
+    return;
+  }
+  const alternative = layoutAlternative(keys);
+  if (alternative) {
+    try {
+      removeShortcuts.push(dzg.ui.addShortcut(alternative, open));
+    } catch (e) {
+      // Не вышло — останется основная клавиша.
+    }
   }
 }
 
@@ -1885,7 +1945,7 @@ const char *const kFile9[] = {
 R"DZGB({
   "id": "command-palette",
   "name": "Командная палитра",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Ctrl+Shift+K — мгновенный поиск по чатам, командам плагинов и действиям клиента. Нечёткий поиск, исправление раскладки, префиксы > и @.",
@@ -1989,16 +2049,16 @@ export const PRESETS = {
     },
     day: {
       accent: '#F2703F', accentHover: '#F5814F', ripple: '#DB5E2F', onAccent: '#2B1409', onAccentSoft: '#6B2E15',
-      text: '#C9531F', active: '#D95B2B', activeRipple: '#C44E22',
-      out: '#FFEDE3', outSelected: '#FFD8C4', outMeta: '#AD5F3B', outService: '#C9531F', outIcon: '#F2703F',
-      outLink: '#B4461A', outWave: '#F6C4AC', outShadow: '#29F2703F',
+      text: '#C4501E', active: '#D95B2B', activeRipple: '#C44E22',
+      out: '#FFEDE3', outSelected: '#FFD8C4', outMeta: '#AD5F3B', outService: '#AD4A1C', outIcon: '#F2703F',
+      outLink: '#A63F15', outWave: '#F6C4AC', outShadow: '#29F2703F',
     },
   },
   Rail: {
     title: 'Rail',
     about: 'оранжевый #C2410C, контрастный',
     night: {
-      accent: '#C2410C', accentHover: '#D04B14', ripple: '#A93709', onAccent: '#FFFFFF', onAccentSoft: '#FFD7C2',
+      accent: '#C2410C', accentHover: '#CB4612', ripple: '#A93709', onAccent: '#FFFFFF', onAccentSoft: '#FFD7C2',
       text: '#F27A3D', active: '#7C2D0E', activeRipple: '#8E3511',
       out: '#3A2418', outSelected: '#4C2E1D', outMeta: '#C99474', outService: '#F28A50', outIcon: '#F27A3D',
       outLink: '#FFAA78', outWave: '#7A4428', outShadow: '#26000000',
@@ -2006,7 +2066,7 @@ export const PRESETS = {
     day: {
       accent: '#C2410C', accentHover: '#CF4A12', ripple: '#A93709', onAccent: '#FFFFFF', onAccentSoft: '#FFD7C2',
       text: '#C2410C', active: '#C2410C', activeRipple: '#A93709',
-      out: '#FDEBDD', outSelected: '#F8D3B8', outMeta: '#B26A3E', outService: '#C2410C', outIcon: '#D9531A',
+      out: '#FDEBDD', outSelected: '#F8D3B8', outMeta: '#B26A3E', outService: '#B23C0A', outIcon: '#D9531A',
       outLink: '#9A330A', outWave: '#F0C3A3', outShadow: '#29C2410C',
     },
   },
@@ -2016,12 +2076,33 @@ export const PRESET_NAMES = ['Monolith', 'Glass', 'Rail', 'None'];
 
 const alpha = (hex, a) => '#' + a + hex.replace('#', '').slice(-6);
 
+// Относительная яркость по WCAG, '#RRGGBB' или '#AARRGGBB' (альфа не важна).
+function luminance(hex) {
+  const v = String(hex).replace('#', '').slice(-6).match(/../g)
+    .map((x) => parseInt(x, 16) / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+
+export function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+
+const isHex = (value) => typeof value === 'string' && /^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(value);
+
 /** Ключи палитры Telegram для пресета (см. Telegram/lib_ui/ui/colors.palette). */
 export function paletteFor(name, night, options) {
   const preset = PRESETS[name];
   if (!preset) return {};
   const c = night ? preset.night : preset.day;
   const o = Object.assign({ bubbles: true, chatList: true }, options || {});
+  // Боковая панель папок тёмная и в дневной теме по умолчанию: цвет текста
+  // на ней — тот из двух вариантов пресета, что читается на её фоне.
+  const sideBarText = isHex(o.sideBarBg)
+    ? [c.text, (night ? preset.day : preset.night).text]
+      .sort((x, y) => contrast(y, o.sideBarBg) - contrast(x, o.sideBarBg))[0]
+    : c.text;
   const result = {
     windowBgActive: c.accent,
     windowFgActive: c.onAccent,
@@ -2043,13 +2124,15 @@ export function paletteFor(name, night, options) {
     historySendIconFg: c.text,
     historyUnreadBarFg: c.text,
     overviewCheckBgActive: c.accent,
+    // Галочка рисуется на заливке акцентом (чекбоксы, выбор медиа).
+    overviewCheckFgActive: c.onAccent,
     dialogsUnreadBg: c.accent,
     dialogsUnreadFg: c.onAccent,
     dialogsSentIconFg: c.text,
     sideBarBadgeBg: c.accent,
     sideBarBadgeFg: c.onAccent,
-    sideBarTextFgActive: c.text,
-    sideBarIconFgActive: c.text,
+    sideBarTextFgActive: sideBarText,
+    sideBarIconFgActive: sideBarText,
   };
   if (o.chatList) {
     Object.assign(result, {
@@ -2107,19 +2190,32 @@ function isNight() {
   return dzg.app.isNightMode ? dzg.app.isNightMode() : true;
 }
 
-export function apply() {
+function themeColor(name) {
+  try {
+    return dzg.theme.get ? dzg.theme.get(name) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// force: тема сменилась. Клиент сам кладёт наши цвета поверх новой темы,
+// но они подобраны под прежний режим, — перекрашиваем (или снимаем) их.
+export function apply(force) {
   const name = presetName();
   const night = isNight();
   const wanted = (name === 'None' || (!night && !setting('applyDay', true)))
     ? null
     : JSON.stringify([name, night, options()]);
-  if (wanted === applied) return;
+  if (wanted === applied && !force) return;
   // Пресет без отключённых групп ключей можно накрыть поверх старого,
   // иначе сначала возвращаем исходную палитру.
   const narrowed = applied && wanted && !sameKeys(applied, wanted);
   if (applied && (!wanted || narrowed)) dzg.theme.reset();
   if (wanted) {
-    if (!dzg.theme.setMany(paletteFor(name, night, options()))) {
+    const palette = paletteFor(name, night, Object.assign(options(), {
+      sideBarBg: themeColor('sideBarBgActive'),
+    }));
+    if (!dzg.theme.setMany(palette)) {
       console.warn('Часть цветов не применилась: палитра этой версии клиента отличается');
     }
   }
@@ -2141,11 +2237,12 @@ export function setPreset(name) {
   return true;
 }
 
-// Тема переключилась (ночь/день): клиент загрузил свежую палитру,
-// наши цвета пропали — применяем заново, когда тема дорисуется.
+// Тема переключилась (ночь/день): клиент загрузил свежую палитру и
+// вернул поверх неё наши прежние цвета. Они для другого режима: когда тема
+// дорисуется, ставим цвета нового режима, а если в нём пресет выключен
+// (applyDay), снимаем их, иначе ночные пузыри остались бы на дневной теме.
 dzg.on('theme.changed', () => {
-  applied = null;
-  setTimeout(apply, 50);
+  setTimeout(() => apply(true), 50);
 });
 
 dzg.on('settings.changed', ({ key }) => {
@@ -2166,7 +2263,8 @@ function render() {
   panel.addLabel('Акценты поверх текущей темы. ' + (isNight() ? 'Сейчас ночной режим.' : 'Сейчас дневной режим.'), { muted: true });
   for (const name of PRESET_NAMES) {
     const about = PRESETS[name] ? PRESETS[name].about : 'стандартные цвета темы';
-    panel.addButton((name === current ? '● ' : '○ ') + name + ' — ' + about, () => setPreset(name), name === current ? undefined : { style: 'light' });
+)DZGB",
+R"DZGB(    panel.addButton((name === current ? '● ' : '○ ') + name + ' — ' + about, () => setPreset(name), name === current ? undefined : { style: 'light' });
   }
   panel.addSeparator();
   panel.addToggle('Исходящие сообщения', !!setting('bubbles', true), (v) => dzg.settings.set('bubbles', !!v));
@@ -2222,7 +2320,7 @@ const char *const kFile11[] = {
 R"DZGB({
   "id": "damza-theme",
   "name": "Тема DamZaGram",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Фирменные акценты DamZaGram поверх любой темы: Monolith (лайм на тёмном), Glass (тёплый коралл), Rail (оранжевый). Отдельные оттенки для ночного и дневного режима, /theme и выбор в главном меню.",
@@ -2283,6 +2381,13 @@ R"DZGB(// Удалённые сообщения: уведомление о ка�
 // Автор: @wetakush
 
 const BURST_MS = 1200;
+// Поток удалений (очистка истории, чистка группы) может идти без пауз:
+// уведомление всё равно приходит не позже чем через столько.
+const MAX_WAIT_MS = 5000;
+// Больше чатов в одной пачке — одно общее уведомление вместо россыпи.
+const MAX_SEPARATE = 3;
+// Журнал пишется на диск не чаще раза в столько, а не на каждое удаление.
+const SAVE_MS = 1000;
 const LOG_KEY = 'log';
 
 const setting = (key, fallback) => {
@@ -2317,25 +2422,57 @@ const cut = (text, n) => (text.length > n ? text.slice(0, n - 1) + '…' : text)
 
 export function shouldTrack(message) {
   if (!message || message.service) return false;
+  // Одно чтение настроек на событие: в пачке их тысячи.
+  const all = dzg.settings.all() || {};
+  const on = (key, fallback) => {
+    const value = all[key];
+    return (value === undefined || value === null || value === '') ? fallback : !!value;
+  };
   const type = message.chat && message.chat.type;
-  if (setting('ignoreOwn', true) && message.out) return false;
-  if (setting('ignoreBots', true) && type === 'bot') return false;
-  if (type === 'channel' && !setting('includeChannels', false)) return false;
-  if (setting('onlyPrivate', true) && type !== 'user' && type !== 'bot') return false;
+  if (on('ignoreOwn', true) && message.out) return false;
+  if (on('ignoreBots', true) && type === 'bot') return false;
+  if (type === 'channel' && !on('includeChannels', false)) return false;
+  if (on('onlyPrivate', true) && type !== 'user' && type !== 'bot') return false;
   return true;
 }
 
 // --- Журнал ---------------------------------------------------------------
 
-function readLog() {
+let unsaved = [];
+let saveTimer = 0;
+
+const logSize = () => Math.max(10, Math.min(5000, Number(setting('logSize', 300)) || 300));
+
+function storedLog() {
   const log = dzg.storage.get(LOG_KEY, []);
   return Array.isArray(log) ? log : [];
 }
 
-function appendLog(entries) {
-  const size = Math.max(10, Math.min(5000, Number(setting('logSize', 300)) || 300));
-  const log = readLog().concat(entries);
-  dzg.storage.set(LOG_KEY, log.slice(-size));
+function readLog() {
+  return unsaved.length ? storedLog().concat(unsaved).slice(-logSize()) : storedLog();
+}
+
+function saveLog() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  if (!unsaved.length) return;
+  const log = storedLog().concat(unsaved).slice(-logSize());
+  unsaved = [];
+  dzg.storage.set(LOG_KEY, log);
+}
+
+// Пачка удалений — это сотни событий подряд: копим их в памяти и пишем
+// журнал (и перерисовываем панель) раз в SAVE_MS.
+function appendLog(entry) {
+  unsaved.push(entry);
+  // Больше, чем журнал может вместить (logSize до 5000), не держим.
+  if (unsaved.length > 10000) unsaved = unsaved.slice(-5000);
+  if (!saveTimer) {
+    saveTimer = setTimeout(() => {
+      saveLog();
+      if (panel && panel.isOpen()) render();
+    }, SAVE_MS);
+  }
 }
 
 function entryOf(message) {
@@ -2353,52 +2490,73 @@ function entryOf(message) {
 
 // --- Уведомления ----------------------------------------------------------
 
-const pending = new Map(); // peerId -> { entries, timer }
+// peerId -> { count, preview: первые 3 записи, authors }: в памяти держим
+// только то, что попадёт в уведомление, сколько бы ни удалили.
+const pending = new Map();
+let flushTimer = 0;
+let firstPendingAt = 0;
 
-function notify(title, text, entry) {
-  const open = () => dzg.chats.open(entry.peerId, entry.id);
+function notify(title, text, onClick) {
   if (setting('systemNotify', true) && dzg.ui.notify) {
-    dzg.ui.notify({ title, text, onClick: open, silent: !!setting('silent', true) });
+    dzg.ui.notify({ title, text, onClick, silent: !!setting('silent', true) });
   } else {
     dzg.ui.toast(text, title);
   }
 }
 
-function flush(peerId) {
-  const batch = pending.get(peerId);
-  pending.delete(peerId);
-  if (!batch || !batch.entries.length) return;
-  const entries = batch.entries;
-  const first = entries[0];
-  if (entries.length === 1) {
+function notifyChat(batch) {
+  const first = batch.preview[0];
+  const open = () => dzg.chats.open(first.peerId, first.id);
+  if (batch.count === 1) {
     const where = first.chatType === 'user' || first.chatType === 'bot'
       ? first.fromName || first.chatName
       : first.fromName + ' в «' + first.chatName + '»';
-    notify('🗑 ' + where + ' удалил(а) сообщение', cut(first.text, 300), first);
+    notify('🗑 ' + where + ' удалил(а) сообщение', cut(first.text, 300), open);
     return;
   }
-  const authors = Array.from(new Set(entries.map((e) => e.fromName).filter(Boolean)));
-  const preview = entries.slice(0, 3).map((e) => '• ' + cut(e.text, 80)).join('\n');
+  const authors = Array.from(batch.authors);
+  const preview = batch.preview.map((e) => '• ' + cut(e.text, 80)).join('\n');
   notify(
-    '🗑 Удалено ' + entries.length + ' сообщ. в «' + first.chatName + '»',
+    '🗑 Удалено ' + batch.count + ' сообщ. в «' + first.chatName + '»',
     (authors.length ? 'От: ' + authors.slice(0, 3).join(', ') + (authors.length > 3 ? '…' : '') + '\n' : '') + preview,
-    first);
+    open);
+}
+
+function flush() {
+  clearTimeout(flushTimer);
+  flushTimer = 0;
+  firstPendingAt = 0;
+  const batches = Array.from(pending.values());
+  pending.clear();
+  if (batches.length > MAX_SEPARATE) {
+    const total = batches.reduce((sum, b) => sum + b.count, 0);
+    const chats = batches.slice(0, 3).map((b) => '«' + b.preview[0].chatName + '» — ' + b.count).join('\n');
+    notify(
+      '🗑 Удалено ' + total + ' сообщ. в ' + batches.length + ' чатах',
+      chats + (batches.length > 3 ? '\n…' : ''),
+      () => show(null));
+    return;
+  }
+  for (const batch of batches) notifyChat(batch);
 }
 
 dzg.on('message.deleted', (message) => {
   if (!shouldTrack(message)) return;
   const entry = entryOf(message);
-  appendLog([entry]);
+  appendLog(entry);
   const key = String(entry.peerId);
   let batch = pending.get(key);
   if (!batch) {
-    batch = { entries: [], timer: 0 };
+    batch = { count: 0, preview: [], authors: new Set() };
     pending.set(key, batch);
   }
-  batch.entries.push(entry);
-  clearTimeout(batch.timer);
-  batch.timer = setTimeout(() => flush(key), BURST_MS);
-  if (panel && panel.isOpen()) render();
+  batch.count++;
+  if (batch.preview.length < 3) batch.preview.push(entry);
+  if (entry.fromName && batch.authors.size < 10) batch.authors.add(entry.fromName);
+  const now = Date.now();
+  if (!firstPendingAt) firstPendingAt = now;
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flush, Math.max(0, Math.min(BURST_MS, firstPendingAt + MAX_WAIT_MS - now)));
 });
 
 // --- Панель журнала -------------------------------------------------------
@@ -2460,6 +2618,9 @@ function exportLog() {
 async function clearLog() {
   const ok = await dzg.ui.confirm('Очистить журнал удалённых сообщений?', { confirmText: 'Очистить', cancelText: 'Отмена' });
   if (!ok) return;
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  unsaved = [];
   dzg.storage.set(LOG_KEY, []);
   render();
 }
@@ -2485,7 +2646,8 @@ dzg.ui.addChatMenuItem({
 });
 
 dzg.on('unload', () => {
-  for (const key of Array.from(pending.keys())) flush(key);
+  saveLog();
+  flush();
   if (panel) panel.close();
 });
 )DZGB",
@@ -2497,7 +2659,7 @@ const char *const kFile13[] = {
 R"DZGB({
   "id": "deleted-alerts",
   "name": "Удалённые сообщения",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Уведомляет, когда собеседник удаляет сообщение: кто, где и что именно. Ведёт журнал удалённого (/deleted), умеет перейти к сохранённому AyuGram сообщению.",
@@ -2648,16 +2810,23 @@ export function match(message) {
   const text = String(message.text || '');
   if (!text) return null;
   const type = message.chat ? message.chat.type : '';
-  const peerId = String(message.peerId || (message.chat && message.chat.id) || '');
   if (cfg.ignoreOwn && message.out) return null;
   if (cfg.onlyGroups && type !== 'group' && type !== 'channel') return null;
-  if (excluded().includes(peerId)) return null;
-  if (!cfg.includeMuted && isMuted(peerId)) return null;
+  let hit = null;
   for (const p of patterns) {
     const m = p.re.exec(text);
-    if (m) return { pattern: p.label, found: m[0], index: m.index };
+    if (m) {
+      hit = { pattern: p.label, found: m[0], index: m.index };
+      break;
+    }
   }
-  return null;
+  if (!hit) return null;
+  // Это вызывается на каждое сообщение: обращения к хранилищу и списку
+  // чатов — только для совпавших.
+  const peerId = String(message.peerId || (message.chat && message.chat.id) || '');
+  if (excluded().includes(peerId)) return null;
+  if (!cfg.includeMuted && isMuted(peerId)) return null;
+  return hit;
 }
 
 export function snippet(text, index, length) {
@@ -2830,7 +2999,7 @@ const char *const kFile15[] = {
 R"DZGB({
   "id": "keyword-alerts",
   "name": "Ключевые слова",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Уведомление, когда в любом чате появляется нужное слово или /регулярка/: имя, ник, проект, «срочно». Журнал срабатываний и управление в /keywords.",
@@ -2955,7 +3124,12 @@ export function parseWhen(input, nowMs) {
     matched = true;
     text = text.slice(m[0].length).trimStart();
   }
-  if (matched) return total > 0 ? { at: now.getTime() + Math.round(total), rest: text } : null;
+  // Не дальше ста лет: иначе дата вне диапазона Date и время не сохранится.
+  const sane = (at) => Number.isFinite(at) && at - now.getTime() < 100 * 365 * 86400000;
+  if (matched) {
+    const at = now.getTime() + Math.round(total);
+    return (total > 0 && sane(at)) ? { at, rest: text } : null;
+  }
 
   const tokens = text.split(/\s+/);
   const take = (n) => tokens.slice(n).join(' ');
@@ -2995,7 +3169,8 @@ export function parseWhen(input, nowMs) {
 
   // Просто число — минуты.
   if (/^\d+$/.test(tokens[0] || '') && Number(tokens[0]) > 0) {
-    return { at: now.getTime() + Number(tokens[0]) * 60000, rest: take(1) };
+    const at = now.getTime() + Number(tokens[0]) * 60000;
+    return sane(at) ? { at, rest: take(1) } : null;
   }
   return null;
 }
@@ -3070,12 +3245,16 @@ function snooze(id, ms) {
 
 let timer = 0;
 
+// Напоминание без числового времени (испорченный storage) считается
+// наступившим: иначе таймер крутился бы с нулевой задержкой вечно.
+const dueAt = (item) => Number(item.at) || 0;
+
 function schedule() {
   clearTimeout(timer);
   timer = 0;
   const list = items();
   if (!list.length) return;
-  const next = Math.min(...list.map((i) => i.at));
+  const next = Math.min(...list.map(dueAt));
   // Короткий шаг: таймер не уплывёт после сна компьютера.
   const delay = Math.max(0, Math.min(MAX_TIMER, next - Date.now()));
   timer = setTimeout(tick, delay);
@@ -3087,10 +3266,12 @@ function fire(item, late) {
   };
   const where = item.chatName ? ' · ' + item.chatName : '';
   const text = item.text + (late ? '\n(пропущено, должно было сработать ' + formatAt(item.at) + ')' : '');
+  // notify — тоже всплывающее окно в клиенте: второй тост с тем же текстом не нужен.
   if (dzg.ui.notify) {
     dzg.ui.notify({ title: '⏰ Напоминание' + where, text, onClick: open, silent: !!setting('silent', false) });
+  } else {
+    dzg.ui.toast(text, '⏰ Напоминание');
   }
-  dzg.ui.toast(text, '⏰ Напоминание');
   if (setting('sendToSaved', false) && dzg.users && dzg.users.self) {
     const self = dzg.users.self();
     const link = item.peerId && item.msgId && dzg.messages.link ? dzg.messages.link(item.peerId, item.msgId) : null;
@@ -3100,15 +3281,28 @@ function fire(item, late) {
 
 function tick() {
   timer = 0;
-  const now = Date.now();
-  const list = items();
-  const due = list.filter((i) => i.at <= now + 500);
-  if (due.length) {
-    for (const item of due) fire(item, now - item.at > 2 * 60 * 1000);
-    dzg.storage.set(ITEMS_KEY, list.filter((i) => i.at > now + 500));
-    if (panel && panel.isOpen()) render();
+  try {
+    const now = Date.now();
+    const list = items();
+    const isDue = (i) => dueAt(i) <= now + 500;
+    const due = list.filter(isDue);
+    if (due.length) {
+      // Сначала убираем из хранилища: fire() может отправить сообщение
+      // (а с ним — события другим плагинам), и упавшее напоминание не
+      // должно срабатывать снова на каждом шаге.
+      dzg.storage.set(ITEMS_KEY, list.filter((i) => !isDue(i)));
+      for (const item of due) {
+        try {
+          fire(item, now - dueAt(item) > 2 * 60 * 1000);
+        } catch (e) {
+          console.error('Напоминание «' + item.text + '» не показалось:', e);
+        }
+      }
+      if (panel && panel.isOpen()) render();
+    }
+  } finally {
+    schedule();
   }
-  schedule();
 }
 
 // --- Панель ---------------------------------------------------------------
@@ -3170,7 +3364,8 @@ async function remindCommand({ rest, chat, replyTo }) {
 }
 
 dzg.commands.register('remind', {
-  description: 'Напомнить: /remind 10m текст, /remind 18:30 текст, /remind завтра 9:00 текст',
+)DZGB",
+R"DZGB(  description: 'Напомнить: /remind 10m текст, /remind 18:30 текст, /remind завтра 9:00 текст',
   run: remindCommand,
 });
 
@@ -3204,8 +3399,7 @@ const snippet = (m) => {
 
 dzg.ui.addMessageMenuItem({
   title: '⏰ Напомнить через…',
-)DZGB",
-R"DZGB(  onClick: (m) => askAndAdd('Напомнить о сообщении', { text: snippet(m), chat: m.chat, msgId: m.id }),
+  onClick: (m) => askAndAdd('Напомнить о сообщении', { text: snippet(m), chat: m.chat, msgId: m.id }),
 });
 
 dzg.ui.addChatMenuItem({
@@ -3234,7 +3428,7 @@ const char *const kFile17[] = {
 R"DZGB({
   "id": "reminders",
   "name": "Напоминания",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "/remind 10m купить хлеб, /remind 18:30 созвон, /remind завтра 9:00 … и «Напомнить через…» в меню сообщения. Переживают перезапуск, по клику открывают нужное сообщение.",
@@ -3522,11 +3716,17 @@ function output(chat, text, replyTo) {
     dzg.ui.compose.focus();
     return;
   }
+  // Команду можно запустить и без открытого чата (палитра, dzg.commands.run).
+  if (!chat) {
+    dzg.clipboard.set(text);
+    dzg.ui.toast(text, 'Чат не открыт — скопировано');
+    return;
+  }
   dzg.messages.send(chat.id, text, replyTo ? { replyTo } : undefined);
 }
 
 function repliedText(chat, replyTo) {
-  if (!replyTo) return '';
+  if (!replyTo || !chat) return '';
   const message = dzg.messages.get(chat.id, replyTo);
   return message && message.text ? message.text : '';
 }
@@ -3562,12 +3762,12 @@ transform('tr', 'Исправить раскладку: ghbdtn → привет'
 
 dzg.commands.register('b64', {
   description: 'Base64: /b64 текст · /b64 -d строка',
-  run: ({ args, rest, chat, replyTo }) => {
+)DZGB",
+R"DZGB(  run: ({ args, rest, chat, replyTo }) => {
     const decode = args[0] === '-d' || args[0] === 'decode' || args[0] === 'd';
     const encode = args[0] === '-e' || args[0] === 'encode' || args[0] === 'e';
     const value = (decode || encode) ? rest.slice(args[0].length).trim() : rest;
-)DZGB",
-R"DZGB(    const source = value || repliedText(chat, replyTo);
+    const source = value || repliedText(chat, replyTo);
     if (!source) {
       dzg.ui.toast('/b64 текст — закодировать, /b64 -d строка — раскодировать');
       return;
@@ -3693,7 +3893,7 @@ const char *const kFile19[] = {
 R"DZGB({
   "id": "text-tools",
   "name": "Текстовые инструменты",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Калькулятор /calc, исправление раскладки «ghbdtn» → «привет» (/tr и меню сообщения), /upper /lower /mock /reverse /b64 /len /rand и автозамена :shrug: :lenny: :flip: перед отправкой.",

@@ -92,6 +92,11 @@ void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controll
 		[box, controller]
 		{
 			box->closeBox();
+			if (!controller) {
+				// DamZaGram: shown from the global menu without a session.
+				File::OpenUrl(Damza::Brand::AuthorLink());
+				return;
+			}
 			controller->showPeerByLink(Window::PeerByLinkInfo{
 				.usernameOrId = QString(Damza::Brand::kAuthorUsername),
 			});

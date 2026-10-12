@@ -254,11 +254,17 @@ function output(chat, text, replyTo) {
     dzg.ui.compose.focus();
     return;
   }
+  // Команду можно запустить и без открытого чата (палитра, dzg.commands.run).
+  if (!chat) {
+    dzg.clipboard.set(text);
+    dzg.ui.toast(text, 'Чат не открыт — скопировано');
+    return;
+  }
   dzg.messages.send(chat.id, text, replyTo ? { replyTo } : undefined);
 }
 
 function repliedText(chat, replyTo) {
-  if (!replyTo) return '';
+  if (!replyTo || !chat) return '';
   const message = dzg.messages.get(chat.id, replyTo);
   return message && message.text ? message.text : '';
 }

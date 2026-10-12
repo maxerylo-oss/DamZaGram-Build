@@ -209,7 +209,7 @@ void FinishWait(int id) {
 		const auto type = map.value(u"type"_q).toString();
 		const auto offset = map.value(u"offset"_q).toInt();
 		const auto length = map.value(u"length"_q).toInt();
-		if (offset < 0 || length <= 0 || offset + length > textLength) {
+		if (offset < 0 || length <= 0 || int64(offset) + length > textLength) {
 			continue;
 		}
 		const auto add = [&](EntityType type, const QString &data = {}) {
@@ -438,9 +438,13 @@ void WithMessage(
 }
 
 // Finds the reaction as the client knows it: "❤️" and "❤" are the same.
+// Never the paid one ("*"): toggleReaction() asserts on it.
 [[nodiscard]] std::optional<Data::ReactionId> AllowedReaction(
 		not_null<HistoryItem*> item,
 		const Data::ReactionId &id) {
+	if (id.paid()) {
+		return std::nullopt;
+	}
 	const auto possible = Data::LookupPossibleReactions(item);
 	if (id.custom()) {
 		const auto known = ranges::any_of(possible.recent, [&](
@@ -453,7 +457,9 @@ void WithMessage(
 	}
 	const auto wanted = WithoutVariation(id.emoji());
 	for (const auto &reaction : possible.recent) {
-		if (reaction->id == id
+		if (reaction->id.paid()) {
+			continue;
+		} else if (reaction->id == id
 			|| (!reaction->id.custom()
 				&& WithoutVariation(reaction->id.emoji()) == wanted)) {
 			return reaction->id;
@@ -509,6 +515,19 @@ void WithMessage(
 	}
 	QDir().mkpath(info.absolutePath());
 	return info.absoluteFilePath();
+}
+
+[[nodiscard]] bool CanWriteFile(const QString &path) {
+	auto file = QFile(path);
+	const auto existed = file.exists();
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+		return false;
+	}
+	file.close();
+	if (!existed) {
+		file.remove();
+	}
+	return true;
 }
 
 [[nodiscard]] QString DocumentName(
@@ -571,23 +590,30 @@ void DownloadDocument(
 		session,
 		requested,
 		DocumentName(document, item));
+	if (!CanWriteFile(target)) {
+		// A loader that can't write the file resets the download folder
+		// in the client settings and shows an error box.
+		promise.reject(u"WRITE_FAILED"_q);
+		return;
+	}
 	document->save(Data::FileOrigin(item->fullId()), target);
 	const auto check = [=] {
 		if (document->loading()) {
 			return false;
+		}
+		// The file first: save() of an already loaded document writes it
+		// right away and keeps the status of an older failed download.
+		const auto path = document->filepath(true);
+		if (!path.isEmpty()) {
+			promise.resolve(path);
 		} else if (document->status == FileDownloadFailed) {
 			promise.reject(u"DOWNLOAD_FAILED"_q);
 		} else if (document->cancelled()) {
 			promise.reject(u"DOWNLOAD_CANCELLED"_q);
+		} else if (QFileInfo::exists(target)) {
+			promise.resolve(target);
 		} else {
-			const auto path = document->filepath(true);
-			if (!path.isEmpty()) {
-				promise.resolve(path);
-			} else if (QFileInfo::exists(target)) {
-				promise.resolve(target);
-			} else {
-				promise.reject(u"DOWNLOAD_FAILED"_q);
-			}
+			promise.reject(u"DOWNLOAD_FAILED"_q);
 		}
 		return true;
 	};
@@ -625,16 +651,26 @@ void DownloadPhoto(
 				promise.reject(u"WRITE_FAILED"_q);
 			}
 			return true;
-		} else if (photo->failed(Data::PhotoSize::Large)) {
+		} else if (photo->failed(Data::PhotoSize::Large)
+			|| !photo->loading(Data::PhotoSize::Large)) {
+			// Failed, or the load didn't start (no location): no event
+			// would come for it.
 			promise.reject(u"DOWNLOAD_FAILED"_q);
 			return true;
 		}
 		return false;
 	};
+	if (!view->loaded()) {
+		// Like the download button: an earlier failure makes the loader
+		// skip the photo until the flag is cleared.
+		photo->clearFailed(Data::PhotoSize::Large);
+		view->wanted(
+			Data::PhotoSize::Large,
+			Data::FileOrigin(item->fullId()));
+	}
 	if (check()) {
 		return;
 	}
-	view->wanted(Data::PhotoSize::Large, Data::FileOrigin(item->fullId()));
 	const auto wait = StartWait(bridge);
 	session->data().photoLoadProgress(
 	) | rpl::filter([=](not_null<PhotoData*> loaded) {
@@ -682,7 +718,14 @@ bool Edit(
 		const QVariantMap &options) {
 	const auto session = ActiveSession();
 	const auto item = ResolveMessage(session, peerId, double(msgId.bare));
-	if (!item) {
+	if (!item || item->isSending() || item->hasFailed()) {
+		// Not on the server yet: editing a scheduled or quick reply one
+		// asserts in its lookupId(), a regular one is MESSAGE_ID_INVALID.
+		return false;
+	} else if (item->computeSuggestionActions()
+		== SuggestionActions::AcceptAndDecline) {
+		// A suggested post is "edited" by suggesting a new one, which
+		// asserts on the suggest options the edit field fills in.
 		return false;
 	}
 	// The same round trip as the edit field: tags, then entities with
@@ -697,13 +740,19 @@ bool Edit(
 		Ui::ItemTextOptions(item->history(), session->user()).flags);
 	auto webpage = Data::WebPageDraft();
 	webpage.removed = options.value(u"noWebpage"_q).toBool();
+	// Like FieldHeader::queryToEdit(): without these the edit flips media
+	// shown above the caption and drops the schedule date.
+	auto editOptions = Api::SendOptions();
+	editOptions.scheduled = item->isScheduled() ? item->date() : 0;
+	editOptions.shortcutId = item->shortcutId();
+	editOptions.invertCaption = item->invertMedia();
 	const auto media = item->media();
 	const auto weak = QPointer<Bridge>(bridge.get());
 	Api::EditTextMessage(
 		item,
 		sending,
 		webpage,
-		Api::SendOptions(),
+		editOptions,
 		[](mtpRequestId) {},
 		[=](const QString &error, mtpRequestId) {
 			if (weak) {
@@ -901,9 +950,21 @@ int Forward(
 			promise.reject(u"MESSAGE_NOT_FOUND"_q);
 			return;
 		}
+		// HistoryItem::allowsForward() without the content protection,
+		// AyuGram forwards that itself. A call is not isService(), but a
+		// forwarded copy of it hits Unexpected() in MediaCall::clone().
 		auto items = HistoryItemsList();
 		for (const auto &item : found) {
-			items.push_back(item);
+			const auto media = item->media();
+			if (!item->isService()
+				&& (item->isRegular() || item->isEphemeral())
+				&& !(media && media->call())) {
+				items.push_back(item);
+			}
+		}
+		if (items.empty()) {
+			promise.reject(u"MESSAGE_NOT_FORWARDABLE"_q);
+			return;
 		}
 		const auto history = session->data().history(to);
 		const auto action = PrepareAction(history, o);
@@ -1034,8 +1095,12 @@ bool MarkRead(const QString &peerId, const QVariantMap &o) {
 	}
 	const auto history = session->data().history(peer);
 	auto &histories = session->data().histories();
-	if (const auto tillId = o.value(u"tillId"_q).toLongLong(); tillId > 0) {
-		histories.readInboxTill(history, MsgId(tillId));
+	if (const auto tillId = MsgId(o.value(u"tillId"_q).toLongLong())
+		; tillId > 0) {
+		if (!IsServerMsgId(tillId)) {
+			return false; // readInboxTill() asserts on it.
+		}
+		histories.readInboxTill(history, tillId);
 	} else {
 		histories.readInbox(history);
 	}
@@ -1178,11 +1243,12 @@ QVariant Link(const QString &peerId, MsgId msgId, const QVariantMap &o) {
 		not_null<HistoryItem*> item,
 		const QString &text) {
 	const auto markup = item->Get<HistoryMessageReplyMarkup>();
-	if (!markup) {
+	const auto wanted = text.trimmed();
+	if (!markup || wanted.isEmpty()) {
+		// Every title contains an empty string.
 		return std::nullopt;
 	}
 	const auto &rows = markup->data.rows;
-	const auto wanted = text.trimmed();
 	for (const auto exact : { true, false }) {
 		for (auto row = 0; row != int(rows.size()); ++row) {
 			for (auto column = 0; column != int(rows[row].size()); ++column) {
@@ -1608,13 +1674,14 @@ DZG_API_MODULE({
 				++i;
 			}
 		};
+		// Same rules as inline(): an unclosed ``` is plain text and only
+		// ESCAPABLE characters are escaped (never the line break).
 		const nextQuote = (from) => {
 			for (let i = from; i < src.length; ++i) {
 				if (src.startsWith('```', i)) {
 					const end = src.indexOf('```', i + 3);
-					if (end < 0) return src.length;
-					i = end + 2;
-				} else if (src[i] === '\\') {
+					i = (end < 0) ? (i + 2) : (end + 2);
+				} else if (src[i] === '\\' && ESCAPABLE.includes(src[i + 1])) {
 					++i;
 				} else if (src[i] === '\n' && (src[i + 1] === '>' || src.startsWith('**>', i + 1))) {
 					return i + 1;
@@ -1690,7 +1757,9 @@ DZG_API_MODULE({
 	};
 	const parseHtml = (source) => {
 		const src = String(source ?? '').replace(/\r\n?/g, '\n');
-		const re = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>/g;
+		// An unquoted value never starts with a quote: otherwise "x" matches
+		// two ways and a long unclosed tag backtracks exponentially.
+		const re = /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=\/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>"'][^\s>]*))?)*)\s*(\/?)>/g;
 		let out = '';
 		const entities = [];
 		const stack = [];
@@ -1790,7 +1859,9 @@ DZG_API_MODULE({
 		.replace(/>/g, '&gt;');
 	const escapeAttribute = (s) => escapeHtml(String(s)).replace(/"/g, '&quot;');
 	const matchUrl = internal.messagesText.matchUrl;
-	const escapeMarkdown = (s, lineStart) => {
+	// before: the output character in front of s; more: a marker follows
+	// s, so its last '*' could pair with the marker's '**'.
+	const escapeMarkdown = (s, lineStart, before, more) => {
 		let result = '';
 		for (let i = 0; i < s.length; ++i) {
 			const url = matchUrl(s, i);
@@ -1801,9 +1872,11 @@ DZG_API_MODULE({
 			}
 			const c = s[i];
 			const atLineStart = (i === 0) ? lineStart : (s[i - 1] === '\n');
+			const prev = i ? s[i - 1] : before;
+			const next = (i + 1 < s.length) ? s[i + 1] : (more ? c : '');
 			if (c === '\\' || c === '`' || c === '[' || c === ']'
 				|| ((c === '*' || c === '_' || c === '~' || c === '|')
-					&& (s[i - 1] === c || s[i + 1] === c))
+					&& (prev === c || next === c))
 				|| (c === '>' && atLineStart)) {
 				result += '\\';
 			}
@@ -1879,19 +1952,24 @@ DZG_API_MODULE({
 			const x = stack.pop();
 			out += wrappers[x.e.type](x.e)[1];
 		};
-		const write = (chunk) => {
+		const write = (chunk, start) => {
 			if (!chunk.length) return;
 			if (html) {
 				out += escapeHtml(chunk);
 				return;
 			}
-			const lineStart = !out.length || out.endsWith('\n');
-			let part = raw() ? chunk : escapeMarkdown(chunk, lineStart);
+			// A line start in the text, even after an opening marker:
+			// '**' + '>' at a line start would parse as a quote.
+			const lineStart = !start || source[start - 1] === '\n';
+			const more = (start + chunk.length < source.length) || stack.length > 0;
+			let part = raw()
+				? chunk
+				: escapeMarkdown(chunk, lineStart, out[out.length - 1], more);
 			if (quoted()) part = part.replace(/\n/g, '\n>');
 			out += part;
 		};
 		for (const point of boundaries) {
-			write(source.slice(pos, point));
+			write(source.slice(pos, point), pos);
 			pos = point;
 			while (stack.some((x) => x.end <= point)) {
 				const reopen = [];
@@ -1966,16 +2044,19 @@ DZG_API_MODULE({
 		while (left > 0) {
 			const page = await load(Math.min(kPage, left), current);
 			const list = (page && page.messages) || [];
+			const key = String(page && page.nextOffsetPeerId) + ':' + String(page && page.nextOffsetId);
+			if (seen.has(key)) break; // The same page again: don't repeat it.
 			result = list.concat(result);
 			left -= list.length;
-			const key = String(page && page.nextOffsetPeerId) + ':' + String(page && page.nextOffsetId);
-			if (!list.length || !page.nextOffsetId || seen.has(key)) break;
+			if (!list.length || !page.nextOffsetId) break;
 			if (page.count > 0 && result.length >= page.count) break;
 			seen.add(key);
+			// Next pages go by offsetId alone: offsetDate was for the first.
 			current = Object.assign({}, current, {
 				offsetId: page.nextOffsetId,
 				offsetPeerId: page.nextOffsetPeerId || '',
 				offsetRate: page.nextRate || 0,
+				offsetDate: 0,
 				addOffset: 0,
 			});
 		}
@@ -1985,7 +2066,7 @@ DZG_API_MODULE({
 		limit,
 		offsetId: Number(cursor.offsetId) || 0,
 		addOffset: Number(cursor.addOffset) || 0,
-		offsetDate: toTime(o.offsetDate),
+		offsetDate: toTime((cursor.offsetDate === undefined) ? o.offsetDate : cursor.offsetDate),
 		minId: Number(o.minId) || 0,
 		maxId: Number(o.maxId) || 0,
 	}));
@@ -2037,12 +2118,13 @@ DZG_API_MODULE({
 			while (left > 0) {
 				const page = await load(Math.min(batch, left), cursor);
 				const list = (page && page.messages) || [];
-				if (!list.length) return;
+				// No messages, or the same page again: don't repeat it.
+				if (!list.length || page.nextOffsetId === cursor.offsetId) return;
 				for (let i = list.length - 1; i >= 0 && left > 0; --i, --left) {
 					yield list[i];
 				}
-				if (!page.nextOffsetId || page.nextOffsetId === cursor.offsetId) return;
-				cursor = { offsetId: page.nextOffsetId, addOffset: 0 };
+				if (!page.nextOffsetId) return;
+				cursor = { offsetId: page.nextOffsetId, offsetDate: 0, addOffset: 0 };
 			}
 		},
 		search(peer, query, options) {

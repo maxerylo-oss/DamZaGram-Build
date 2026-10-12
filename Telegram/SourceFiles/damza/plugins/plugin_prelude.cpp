@@ -81,7 +81,7 @@ QString Prelude() {
 
 	const startTimer = (fn, ms, repeat, args) => {
 		if (typeof fn !== 'function') throw new TypeError('Timer callback must be a function');
-		const id = native.startTimer(Math.max(0, Number(ms) || 0), repeat);
+		const id = native.startTimer(Math.min(Math.max(0, Number(ms) || 0), 2147483647), repeat);
 		timers.set(id, { fn, repeat, args });
 		return id;
 	};

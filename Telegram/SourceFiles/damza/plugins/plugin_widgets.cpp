@@ -8,6 +8,7 @@
 #include "ui/widgets/labels.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QPointer>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtWidgets/QAbstractButton>
@@ -108,6 +109,7 @@ void Click(not_null<QWidget*> widget, int x, int y) {
 		target = child;
 	}
 	const auto global = QPointF(target->mapToGlobal(local.toPoint()));
+	const auto weak = QPointer<QWidget>(target);
 	auto press = QMouseEvent(
 		QEvent::MouseButtonPress,
 		local,
@@ -116,6 +118,9 @@ void Click(not_null<QWidget*> widget, int x, int y) {
 		Qt::LeftButton,
 		Qt::NoModifier);
 	QCoreApplication::sendEvent(target, &press);
+	if (!weak) {
+		return;
+	}
 	auto release = QMouseEvent(
 		QEvent::MouseButtonRelease,
 		local,
@@ -127,11 +132,18 @@ void Click(not_null<QWidget*> widget, int x, int y) {
 }
 
 void TypeText(not_null<QWidget*> widget, const QString &text) {
+	const auto weak = QPointer<QWidget>(widget.get());
 	for (const auto &ch : text) {
 		auto press = QKeyEvent(QEvent::KeyPress, 0, Qt::NoModifier, ch);
 		QCoreApplication::sendEvent(widget, &press);
+		if (!weak) {
+			return;
+		}
 		auto release = QKeyEvent(QEvent::KeyRelease, 0, Qt::NoModifier, ch);
 		QCoreApplication::sendEvent(widget, &release);
+		if (!weak) {
+			return;
+		}
 	}
 }
 

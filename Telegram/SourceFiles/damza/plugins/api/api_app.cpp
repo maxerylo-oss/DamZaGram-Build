@@ -31,12 +31,20 @@ DZG_API_MODULE({
 			const auto night = args.value(0).toBool();
 			if (Window::Theme::IsNightMode() != night) {
 				// Toggling destroys theme-dependent widgets: do it later.
-				crl::on_main([] { Window::Theme::ToggleNightMode(); });
+				crl::on_main([] {
+					if (Manager::Exists()) {
+						Window::Theme::ToggleNightMode();
+					}
+				});
 			}
 			return QVariant();
 		} });
 		out.push_back({ "app_restart", [](const Args &) {
-			crl::on_main([] { Core::Restart(); });
+			crl::on_main([] {
+				if (Manager::Exists()) {
+					Core::Restart();
+				}
+			});
 			return QVariant();
 		} });
 	},

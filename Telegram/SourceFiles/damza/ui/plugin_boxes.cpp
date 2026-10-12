@@ -866,6 +866,11 @@ void ShowInstallFromUrlBox(std::shared_ptr<Ui::Show> show) {
 		}
 		box->setFocusCallback([=] { field->setFocusFast(); });
 		const auto loading = box->lifetime().make_state<bool>(false);
+		// Outlives the box: the download may finish after it is gone.
+		const auto closed = std::make_shared<bool>(false);
+		box->boxClosing() | rpl::on_next([=] {
+			*closed = true;
+		}, box->lifetime());
 		const auto submit = [=] {
 			const auto url = field->getLastText().trimmed();
 			if (url.isEmpty()) {
@@ -878,9 +883,12 @@ void ShowInstallFromUrlBox(std::shared_ptr<Ui::Show> show) {
 			box->showLoading(true);
 			const auto weak = QPointer<Ui::GenericBox>(box.get());
 			DownloadPackage(url, [=](Package package) {
-				if (const auto strong = weak.data()) {
-					strong->closeBox();
+				const auto strong = weak.data();
+				if (!strong || *closed) {
+					// Cancelled while downloading.
+					return;
 				}
+				strong->closeBox();
 				ShowInstallBox(show, std::move(package));
 			});
 		};

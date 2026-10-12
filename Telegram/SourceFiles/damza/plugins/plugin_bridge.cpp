@@ -163,10 +163,13 @@ void Bridge::ForgetThemeOverrides() {
 		const auto any = ranges::any_of(AllBridges, [](Bridge *bridge) {
 			return !bridge->_themeOverrides.empty();
 		});
-		if (!any || BasePalette) {
+		if (!any) {
 			return;
 		}
-		BasePalette = style::main_palette::save();
+		// A theme.changed handler may have saved the new base already.
+		if (!BasePalette) {
+			BasePalette = style::main_palette::save();
+		}
 		for (const auto bridge : AllBridges) {
 			for (const auto &[name, color] : bridge->_themeOverrides) {
 				[[maybe_unused]] const auto ok = ApplyPaletteColor(name, color);

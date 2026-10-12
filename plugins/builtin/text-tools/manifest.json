@@ -1,7 +1,7 @@
 {
   "id": "text-tools",
   "name": "Текстовые инструменты",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Калькулятор /calc, исправление раскладки «ghbdtn» → «привет» (/tr и меню сообщения), /upper /lower /mock /reverse /b64 /len /rand и автозамена :shrug: :lenny: :flip: перед отправкой.",

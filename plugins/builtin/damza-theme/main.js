@@ -50,16 +50,16 @@ export const PRESETS = {
     },
     day: {
       accent: '#F2703F', accentHover: '#F5814F', ripple: '#DB5E2F', onAccent: '#2B1409', onAccentSoft: '#6B2E15',
-      text: '#C9531F', active: '#D95B2B', activeRipple: '#C44E22',
-      out: '#FFEDE3', outSelected: '#FFD8C4', outMeta: '#AD5F3B', outService: '#C9531F', outIcon: '#F2703F',
-      outLink: '#B4461A', outWave: '#F6C4AC', outShadow: '#29F2703F',
+      text: '#C4501E', active: '#D95B2B', activeRipple: '#C44E22',
+      out: '#FFEDE3', outSelected: '#FFD8C4', outMeta: '#AD5F3B', outService: '#AD4A1C', outIcon: '#F2703F',
+      outLink: '#A63F15', outWave: '#F6C4AC', outShadow: '#29F2703F',
     },
   },
   Rail: {
     title: 'Rail',
     about: 'оранжевый #C2410C, контрастный',
     night: {
-      accent: '#C2410C', accentHover: '#D04B14', ripple: '#A93709', onAccent: '#FFFFFF', onAccentSoft: '#FFD7C2',
+      accent: '#C2410C', accentHover: '#CB4612', ripple: '#A93709', onAccent: '#FFFFFF', onAccentSoft: '#FFD7C2',
       text: '#F27A3D', active: '#7C2D0E', activeRipple: '#8E3511',
       out: '#3A2418', outSelected: '#4C2E1D', outMeta: '#C99474', outService: '#F28A50', outIcon: '#F27A3D',
       outLink: '#FFAA78', outWave: '#7A4428', outShadow: '#26000000',
@@ -67,7 +67,7 @@ export const PRESETS = {
     day: {
       accent: '#C2410C', accentHover: '#CF4A12', ripple: '#A93709', onAccent: '#FFFFFF', onAccentSoft: '#FFD7C2',
       text: '#C2410C', active: '#C2410C', activeRipple: '#A93709',
-      out: '#FDEBDD', outSelected: '#F8D3B8', outMeta: '#B26A3E', outService: '#C2410C', outIcon: '#D9531A',
+      out: '#FDEBDD', outSelected: '#F8D3B8', outMeta: '#B26A3E', outService: '#B23C0A', outIcon: '#D9531A',
       outLink: '#9A330A', outWave: '#F0C3A3', outShadow: '#29C2410C',
     },
   },
@@ -77,12 +77,33 @@ export const PRESET_NAMES = ['Monolith', 'Glass', 'Rail', 'None'];
 
 const alpha = (hex, a) => '#' + a + hex.replace('#', '').slice(-6);
 
+// Относительная яркость по WCAG, '#RRGGBB' или '#AARRGGBB' (альфа не важна).
+function luminance(hex) {
+  const v = String(hex).replace('#', '').slice(-6).match(/../g)
+    .map((x) => parseInt(x, 16) / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+
+export function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+
+const isHex = (value) => typeof value === 'string' && /^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(value);
+
 /** Ключи палитры Telegram для пресета (см. Telegram/lib_ui/ui/colors.palette). */
 export function paletteFor(name, night, options) {
   const preset = PRESETS[name];
   if (!preset) return {};
   const c = night ? preset.night : preset.day;
   const o = Object.assign({ bubbles: true, chatList: true }, options || {});
+  // Боковая панель папок тёмная и в дневной теме по умолчанию: цвет текста
+  // на ней — тот из двух вариантов пресета, что читается на её фоне.
+  const sideBarText = isHex(o.sideBarBg)
+    ? [c.text, (night ? preset.day : preset.night).text]
+      .sort((x, y) => contrast(y, o.sideBarBg) - contrast(x, o.sideBarBg))[0]
+    : c.text;
   const result = {
     windowBgActive: c.accent,
     windowFgActive: c.onAccent,
@@ -104,13 +125,15 @@ export function paletteFor(name, night, options) {
     historySendIconFg: c.text,
     historyUnreadBarFg: c.text,
     overviewCheckBgActive: c.accent,
+    // Галочка рисуется на заливке акцентом (чекбоксы, выбор медиа).
+    overviewCheckFgActive: c.onAccent,
     dialogsUnreadBg: c.accent,
     dialogsUnreadFg: c.onAccent,
     dialogsSentIconFg: c.text,
     sideBarBadgeBg: c.accent,
     sideBarBadgeFg: c.onAccent,
-    sideBarTextFgActive: c.text,
-    sideBarIconFgActive: c.text,
+    sideBarTextFgActive: sideBarText,
+    sideBarIconFgActive: sideBarText,
   };
   if (o.chatList) {
     Object.assign(result, {
@@ -168,19 +191,32 @@ function isNight() {
   return dzg.app.isNightMode ? dzg.app.isNightMode() : true;
 }
 
-export function apply() {
+function themeColor(name) {
+  try {
+    return dzg.theme.get ? dzg.theme.get(name) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// force: тема сменилась. Клиент сам кладёт наши цвета поверх новой темы,
+// но они подобраны под прежний режим, — перекрашиваем (или снимаем) их.
+export function apply(force) {
   const name = presetName();
   const night = isNight();
   const wanted = (name === 'None' || (!night && !setting('applyDay', true)))
     ? null
     : JSON.stringify([name, night, options()]);
-  if (wanted === applied) return;
+  if (wanted === applied && !force) return;
   // Пресет без отключённых групп ключей можно накрыть поверх старого,
   // иначе сначала возвращаем исходную палитру.
   const narrowed = applied && wanted && !sameKeys(applied, wanted);
   if (applied && (!wanted || narrowed)) dzg.theme.reset();
   if (wanted) {
-    if (!dzg.theme.setMany(paletteFor(name, night, options()))) {
+    const palette = paletteFor(name, night, Object.assign(options(), {
+      sideBarBg: themeColor('sideBarBgActive'),
+    }));
+    if (!dzg.theme.setMany(palette)) {
       console.warn('Часть цветов не применилась: палитра этой версии клиента отличается');
     }
   }
@@ -202,11 +238,12 @@ export function setPreset(name) {
   return true;
 }
 
-// Тема переключилась (ночь/день): клиент загрузил свежую палитру,
-// наши цвета пропали — применяем заново, когда тема дорисуется.
+// Тема переключилась (ночь/день): клиент загрузил свежую палитру и
+// вернул поверх неё наши прежние цвета. Они для другого режима: когда тема
+// дорисуется, ставим цвета нового режима, а если в нём пресет выключен
+// (applyDay), снимаем их, иначе ночные пузыри остались бы на дневной теме.
 dzg.on('theme.changed', () => {
-  applied = null;
-  setTimeout(apply, 50);
+  setTimeout(() => apply(true), 50);
 });
 
 dzg.on('settings.changed', ({ key }) => {

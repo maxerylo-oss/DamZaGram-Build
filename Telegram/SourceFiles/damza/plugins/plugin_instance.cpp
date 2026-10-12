@@ -33,6 +33,8 @@ Instance::~Instance() {
 		_unloading = true;
 		dispatch(u"unload"_q, QVariant());
 	}
+	// Deleting widgets below fires their events: no JS after "unload".
+	_closed = true;
 	// Bridge owns widgets and timers that reference the runtime.
 	_bridge = nullptr;
 	_runtime = nullptr;
@@ -116,7 +118,7 @@ not_null<Bridge*> Instance::bridge() const {
 }
 
 QString Instance::evaluate(const QString &code, QString *error) {
-	if (!_runtime) {
+	if (!_runtime || _closed) {
 		*error = u"Plugin is not loaded."_q;
 		return QString();
 	}
@@ -128,7 +130,7 @@ bool Instance::busy() const {
 }
 
 QVariant Instance::dispatch(const QString &type, const QVariant &payload) {
-	if (!_runtime) {
+	if (!_runtime || _closed) {
 		return QVariant();
 	}
 	auto error = QString();

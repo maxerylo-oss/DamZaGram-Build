@@ -25,7 +25,7 @@ namespace Damza::Plugins {
 // Called once the primary window has been shown.
 void Start();
 
-// Called on application quit.
+// Called from Core::Application destructor, while windows and sessions live.
 void Shutdown();
 
 // True if some plugin asked to hide this message.

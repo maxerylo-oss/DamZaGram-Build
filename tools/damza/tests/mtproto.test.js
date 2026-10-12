@@ -53,6 +53,18 @@ assert(Object.keys(dzg.api).includes('layer'), 'layer is enumerable');
   eq(await promise, true);
 }
 
+// --- options reach C++ as ints: no NaN / Infinity / negative / fractions
+{
+  const promise = dzg.api.call('help.getConfig', {}, { timeout: Infinity, floodSleep: -5, dc: 'x' });
+  eq(sandbox.last('api_call').args[2], { timeout: 0x7FFFFFFF, floodSleep: 0, applyResult: true, dc: 0 });
+  sandbox.settle(nextId, true, 'true');
+  await promise;
+  const small = dzg.api.call('help.getConfig', {}, { timeout: 0.5, floodSleep: NaN, dc: 2.0 });
+  eq(sandbox.last('api_call').args[2], { timeout: 1, floodSleep: 0, applyResult: true, dc: 2 });
+  sandbox.settle(nextId, true, 'true');
+  await small;
+}
+
 // --- RPC errors become Error objects with code / type / seconds
 await rejects((() => {
   const p = dzg.api.call('messages.sendReaction', { peer: 'me', msg_id: 1 });

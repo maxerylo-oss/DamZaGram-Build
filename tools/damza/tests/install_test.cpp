@@ -32,6 +32,8 @@ QByteArray Read(const QString &path) {
 
 int main(int argc, char **argv) {
 	QCoreApplication app(argc, argv);
+	// Unbuffered, so a crash still shows the checks that passed.
+	std::setvbuf(stdout, nullptr, _IONBF, 0);
 	const auto fixtures = QString::fromLocal8Bit(argv[1]);
 	QTemporaryDir temp;
 	auto &manager = Manager::Get();
@@ -118,6 +120,7 @@ const x = 1; // @name not-a-header
 	Check(result.error.isEmpty() && result.updated, "update", result.error);
 	Check(!QFile::exists(manager.pluginsPath() + u"zipped/stale.js"_q), "update replaces folder");
 
+	manager.enabled[u"my-cool-plugin"_q] = true; // Left from a folder deleted by hand.
 	result = InstallPackage(script, false);
 	Check(result.error.isEmpty() && !manager.enabled[u"my-cool-plugin"_q], "install disabled", result.error);
 
@@ -136,16 +139,89 @@ const x = 1; // @name not-a-header
 	Check(!QFile::exists(manager.dataPath() + u"zipped.json"_q), "uninstall removes data");
 	Check(!UninstallPlugin(u"nope"_q, false, &error), "uninstall missing fails");
 
-	QDir().mkpath(manager.pluginsPath() + u"core"_q);
-	auto builtin = QFile(manager.pluginsPath() + u"core/manifest.json"_q);
+	QDir().mkpath(manager.pluginsPath() + u"reminders"_q);
+	auto builtin = QFile(manager.pluginsPath() + u"reminders/manifest.json"_q);
 	builtin.open(QIODevice::WriteOnly);
-	builtin.write(R"({"id":"core","builtin":true})");
+	builtin.write(R"({"id":"reminders","builtin":true})");
 	builtin.close();
 	manager.rescan();
-	manager.setEnabled(u"core"_q, true);
-	Check(IsBuiltinPlugin(u"core"_q), "builtin detected");
-	Check(UninstallPlugin(u"core"_q, false, &error) && !manager.enabled[u"core"_q], "builtin only disabled");
-	Check(QDir(manager.pluginsPath() + u"core"_q).exists(), "builtin folder kept");
+	manager.setEnabled(u"reminders"_q, true);
+	Check(IsBuiltinPlugin(u"reminders"_q), "builtin detected");
+	Check(UninstallPlugin(u"reminders"_q, false, &error) && !manager.enabled[u"reminders"_q], "builtin only disabled");
+	Check(QDir(manager.pluginsPath() + u"reminders"_q).exists(), "builtin folder kept");
+
+	// A plugin folder that is a symlink is a developer's live copy:
+	// neither uninstall nor update may touch the files it points to.
+	const auto live = temp.path() + u"/live-copy"_q;
+	QDir().mkpath(live + u"/.git"_q);
+	auto liveManifest = QFile(live + u"/manifest.json"_q);
+	liveManifest.open(QIODevice::WriteOnly);
+	liveManifest.write(R"({"id":"zipped","version":"0.1.0"})");
+	liveManifest.close();
+	auto liveMain = QFile(live + u"/main.js"_q);
+	liveMain.open(QIODevice::WriteOnly);
+	liveMain.write("// my sources");
+	liveMain.close();
+	QFile(live + u"/.git/HEAD"_q).open(QIODevice::WriteOnly);
+	Check(QFile::link(live, manager.pluginsPath() + u"zipped"_q), "symlink created");
+	manager.rescan();
+	result = InstallPackage(nested, true);
+	Check(!result.error.isEmpty(), "update through a symlink refused", result.error);
+	Check(Read(live + u"/main.js"_q) == "// my sources", "symlink target kept on update");
+	Check(QFile::exists(live + u"/.git/HEAD"_q), "symlink target .git kept on update");
+	Check(UninstallPlugin(u"zipped"_q, false, &error), "uninstall symlinked plugin", error);
+	Check(!QFileInfo(manager.pluginsPath() + u"zipped"_q).isSymLink(), "uninstall removes the symlink");
+	Check(Read(live + u"/main.js"_q) == "// my sources", "uninstall keeps symlink target");
+	Check(QFile::exists(live + u"/.git/HEAD"_q), "uninstall keeps symlink target .git");
+
+	// A new plugin must not wipe a folder that holds another plugin.
+	QDir().mkpath(manager.pluginsPath() + u"folder-plugin"_q);
+	auto other = QFile(manager.pluginsPath() + u"folder-plugin/manifest.json"_q);
+	other.open(QIODevice::WriteOnly);
+	other.write(R"({"id":"someone-else"})");
+	other.close();
+	manager.rescan();
+	result = InstallPackage(folder, true);
+	Check(!result.error.isEmpty(), "install over another plugin's folder refused", result.error);
+	Check(Read(manager.pluginsPath() + u"folder-plugin/manifest.json"_q).contains("someone-else"), "other plugin's folder kept");
+
+	// The DevTools scratchpad must not overwrite a foreign "devtools" folder.
+	QDir().mkpath(manager.pluginsPath() + u"devtools"_q);
+	auto foreign = QFile(manager.pluginsPath() + u"devtools/main.js"_q);
+	foreign.open(QIODevice::WriteOnly);
+	foreign.write("// not a scratchpad");
+	foreign.close();
+	manager.rescan();
+	Check(EnsureScratchPlugin(&error).isEmpty(), "scratchpad refuses a foreign folder");
+	Check(Read(manager.pluginsPath() + u"devtools/main.js"_q) == "// not a scratchpad", "foreign devtools folder kept");
+
+	// Only plugins shipped with the client count as built-in.
+	QDir().mkpath(manager.pluginsPath() + u"fake"_q);
+	auto fake = QFile(manager.pluginsPath() + u"fake/manifest.json"_q);
+	fake.open(QIODevice::WriteOnly);
+	fake.write(R"({"id":"fake","builtin":true})");
+	fake.close();
+	manager.rescan();
+	Check(!IsBuiltinPlugin(u"fake"_q), "foreign plugin claiming builtin is not built-in");
+	Check(UninstallPlugin(u"fake"_q, false, &error) && !QDir(manager.pluginsPath() + u"fake"_q).exists(), "foreign plugin claiming builtin is removable", error);
+
+	const auto spaced = ReadPackageFromBytes(R"(// @id  padded
+1;)", u"x.js"_q);
+	Check(spaced.valid(), "header id is trimmed", spaced.error);
+	const auto padded = temp.path() + u"/padded"_q;
+	QDir().mkpath(padded);
+	auto paddedManifest = QFile(padded + u"/manifest.json"_q);
+	paddedManifest.open(QIODevice::WriteOnly);
+	paddedManifest.write(R"({"id":" padded "})");
+	paddedManifest.close();
+	QFile(padded + u"/main.js"_q).open(QIODevice::WriteOnly);
+	Check(!ReadPackageFromPath(padded).valid(), "manifest id with spaces refused");
+
+	auto httpError = QString();
+	DownloadPackage(u"http://example.com/x.dzg.zip"_q, [&](Package package) {
+		httpError = package.error;
+	});
+	Check(!httpError.isEmpty(), "plain http download refused", httpError);
 
 	std::printf(Failures ? "FAILED: %d\n" : "ALL OK\n", Failures);
 	return Failures ? 1 : 0;

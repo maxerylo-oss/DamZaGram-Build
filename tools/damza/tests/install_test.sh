@@ -36,6 +36,7 @@ g++ -std=c++20 -O0 -g -fPIC -Wall -Wno-unused-parameter -Wno-unused-result \
 	-I"$HERE/install_stub" -I"$SRC" -I"$ROOT/Telegram/lib_base" \
 	"$SRC/damza/plugins/plugin_install.cpp" \
 	"$SRC/damza/plugins/plugin_types_embedded.cpp" \
+	"$SRC/damza/plugins/builtin/builtin_files.cpp" \
 	"$HERE/install_test.cpp" \
 	$(pkg-config --cflags --libs Qt6Core Qt6Gui Qt6Network minizip) -o "$WORK/install_test"
 "$WORK/install_test" "$WORK"

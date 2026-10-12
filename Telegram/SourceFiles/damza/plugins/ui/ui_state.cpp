@@ -137,6 +137,7 @@ struct State {
 	bool rendering = false;
 	bool updatingTopBar = false;
 	bool topBarRefreshQueued = false;
+	bool topBarUpdateQueued = false;
 	bool composeRefreshQueued = false;
 	bool mainMenuRefreshQueued = false;
 	bool renderRefreshQueued = false;
@@ -182,15 +183,23 @@ void PruneDead() {
 	return peer ? QVariant(SerializePeer(peer)) : QVariant();
 }
 
+// The loaded instance the callback was registered by, if it still runs.
+[[nodiscard]] Instance *CallbackInstance(const Callback &callback) {
+	if (!callback || !callback.bridge || !Manager::Exists()) {
+		return nullptr;
+	}
+	const auto instance = Manager::Get().instance(callback.pluginId);
+	return (instance && callback.bridge->instance().get() == instance)
+		? instance
+		: nullptr;
+}
+
 void Drop(const Callback &callback) {
 	if (!callback) {
 		return;
 	}
 	crl::on_main([=] {
-		if (!Manager::Exists()) {
-			return;
-		}
-		if (const auto instance = Manager::Get().instance(callback.pluginId)) {
+		if (const auto instance = CallbackInstance(callback)) {
 			instance->dispatch(u"ui:drop"_q, QVariantMap{
 				{ u"ids"_q, QVariantList{ callback.id } },
 			});
@@ -260,9 +269,16 @@ void BuildTopBar(not_null<QWidget*> bar, TopBarState &state) {
 void RefreshTopBars(bool rebuild) {
 	auto bars = std::vector<QPointer<HistoryView::TopBarWidget>>();
 	const auto any = HasKind(Kind::TopBar);
-	for (const auto widget : QApplication::allWidgets()) {
-		if (const auto bar = dynamic_cast<HistoryView::TopBarWidget*>(widget)) {
-			bars.push_back(bar);
+	if (rebuild && any) {
+		for (const auto widget : QApplication::allWidgets()) {
+			if (const auto bar = dynamic_cast<HistoryView::TopBarWidget*>(widget)) {
+				bars.push_back(bar);
+			}
+		}
+	} else {
+		// Only bars that already show plugin buttons need an update.
+		for (const auto &[widget, state] : S().topBars) {
+			bars.push_back(static_cast<HistoryView::TopBarWidget*>(widget));
 		}
 	}
 	for (const auto &bar : bars) {
@@ -352,9 +368,9 @@ void ScheduleComposeRefresh() {
 
 [[nodiscard]] ComposeField *CurrentField() {
 	auto &fields = S().fields;
-	const auto window = Manager::Exists()
-		? Manager::Get().activeWindow()
-		: nullptr;
+	// The window the user works in, a separate chat window as well
+	// (Manager::activeWindow() prefers the primary one).
+	const auto window = Core::App().activeWindow();
 	const auto top = window ? window->widget()->window() : nullptr;
 	auto best = (ComposeField*)nullptr;
 	for (auto &entry : fields) {
@@ -484,6 +500,25 @@ void EnsureShortcutFilter() {
 	return host;
 }
 
+// The sibling stacked right above `widget`, skipping `except`.
+[[nodiscard]] QWidget *WidgetAbove(
+		not_null<QWidget*> widget,
+		not_null<QWidget*> except) {
+	const auto parent = widget->parentWidget();
+	if (!parent) {
+		return nullptr;
+	}
+	auto found = false;
+	for (const auto child : parent->children()) {
+		if (!found) {
+			found = (child == widget.get());
+		} else if (child != except.get() && child->isWidgetType()) {
+			return static_cast<QWidget*>(child);
+		}
+	}
+	return nullptr;
+}
+
 [[nodiscard]] SidePanel *PanelById(not_null<Bridge*> bridge, int id) {
 	return dynamic_cast<SidePanel*>(bridge->widgetById(id));
 }
@@ -521,10 +556,7 @@ void RefreshRenderedViews() {
 } // namespace
 
 QVariant Call(const Callback &callback, const QVariantList &args) {
-	if (!callback || !Manager::Exists()) {
-		return QVariant();
-	}
-	const auto instance = Manager::Get().instance(callback.pluginId);
+	const auto instance = CallbackInstance(callback);
 	if (!instance) {
 		return QVariant();
 	}
@@ -641,17 +673,24 @@ bool Remove(const QString &pluginId, int id) {
 }
 
 void RefreshButtons() {
+	auto &state = S();
+	if (state.topBarUpdateQueued) {
+		return;
+	}
+	state.topBarUpdateQueued = true;
 	crl::on_main([] {
+		S().topBarUpdateQueued = false;
 		RefreshTopBars(false);
 	});
 }
 
-void Notify(const QString &pluginId, const QVariantMap &spec) {
+void Notify(not_null<Bridge*> bridge, const QVariantMap &spec) {
 	const auto title = spec.value(u"title"_q).toString();
 	const auto text = spec.value(u"text"_q).toString();
 	const auto click = Callback{
-		.pluginId = pluginId,
+		.pluginId = bridge->instance()->manifest().id,
 		.id = spec.value(u"click"_q).toInt(),
+		.bridge = bridge.get(),
 	};
 	const auto silent = spec.value(u"silent"_q).toBool();
 	const auto window = Manager::Exists()
@@ -749,10 +788,8 @@ void ComposeFocus() {
 		return;
 	}
 	const auto field = entry->field.data();
-	if (Manager::Exists()) {
-		if (const auto window = Manager::Get().activeWindow()) {
-			window->activate();
-		}
+	if (const auto window = Core::App().findWindow(field)) {
+		window->activate();
 	}
 	field->setFocusFast();
 }
@@ -804,19 +841,30 @@ QVariant PanelOpen(not_null<Bridge*> bridge, const QVariantMap &spec) {
 			delete weak.data();
 		});
 	}, panel->lifetime());
+	const auto weakBridge = QPointer<Bridge>(bridge.get());
+	const auto windowRaw = mainWindow.get();
 	QObject::connect(panel, &QObject::destroyed, [=] {
 		auto &list = S().panels;
 		list.erase(ranges::remove_if(list, [&](const PanelEntry &entry) {
 			return !entry.panel
 				|| (entry.pluginId == pluginId && entry.id == id);
 		}), end(list));
-		if (!Manager::Exists()) {
-			return;
-		}
-		if (const auto instance = Manager::Get().instance(pluginId)) {
-			instance->dispatch(u"ui:panelClosed"_q, QVariantMap{
-				{ u"id"_q, id },
-			});
+		const auto notify = [=] {
+			const auto instance = (weakBridge && Manager::Exists())
+				? Manager::Get().instance(pluginId)
+				: nullptr;
+			if (instance && weakBridge->instance().get() == instance) {
+				instance->dispatch(u"ui:panelClosed"_q, QVariantMap{
+					{ u"id"_q, id },
+				});
+			}
+		};
+		if (S().panelHosts.contains(windowRaw)) {
+			notify();
+		} else {
+			// The window is being destroyed with the panel: run the
+			// plugin's close handlers after that, not in the middle.
+			crl::on_main(notify);
 		}
 	});
 	host->add(panel);
@@ -910,7 +958,11 @@ bool PanelIsOpen(not_null<Bridge*> bridge, int panelId) {
 void SetRenderTransforms(const QString &pluginId, bool has) {
 	auto &list = S().renderPlugins;
 	const auto i = ranges::find(list, pluginId);
-	if (has && i == end(list)) {
+	if (has && !Alive(pluginId)) {
+		// Registered from an `unload` handler: nobody would remove it and
+		// every message layout would take the slow path for good.
+		return;
+	} else if (has && i == end(list)) {
 		list.push_back(pluginId);
 	} else if (!has && i != end(list)) {
 		list.erase(i);
@@ -1208,10 +1260,16 @@ int PlaceSidePanels(not_null<Window::MainWindow*> window, QRect area) {
 	if (host->isHidden()) {
 		host->show();
 	}
-	if (docked) {
-		host->stackUnder(controller->content());
-	} else {
-		host->raise();
+	if (const auto content = controller->widget()->sessionContent()) {
+		if (docked) {
+			host->stackUnder(content);
+		} else if (const auto above = WidgetAbove(content, host)) {
+			// Over the chat, but under layers (boxes, settings), toasts
+			// and the rest of the overlays created above it.
+			host->stackUnder(above);
+		} else {
+			host->raise();
+		}
 	}
 	return docked ? width : 0;
 }

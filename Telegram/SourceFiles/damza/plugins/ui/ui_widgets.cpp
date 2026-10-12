@@ -451,6 +451,17 @@ SidePanelHost::SidePanelHost(QWidget *parent)
 	hide();
 }
 
+SidePanelHost::~SidePanelHost() {
+	// ~QWidget deletes the panels after our members are gone, and Qt still
+	// delivers their destroyed() to remove() then (the window was closed
+	// with panels open). Cut those connections while we are intact.
+	for (const auto &panel : base::take(_panels)) {
+		if (const auto raw = panel.data()) {
+			QObject::disconnect(raw, nullptr, this, nullptr);
+		}
+	}
+}
+
 void SidePanelHost::add(not_null<SidePanel*> panel) {
 	panel->setParent(this);
 	_panels.push_back(panel.get());
@@ -519,11 +530,20 @@ void SidePanelHost::refreshTabs() {
 	if (!_tabs) {
 		_tabs.create(this, st::defaultTabsSlider);
 		_tabs->sectionActivated() | rpl::on_next([=](int index) {
-			if (index >= 0 && index < int(_panels.size())) {
-				if (const auto panel = _panels[index].data()) {
-					crl::on_main(this, [=] { activate(panel); });
-				}
+			// setActiveSectionFast() below fires this as well: activating
+			// the active panel again would loop through refreshTabs().
+			if (index < 0 || index >= int(_panels.size())) {
+				return;
 			}
+			const auto panel = _panels[index];
+			if (!panel || panel == _active) {
+				return;
+			}
+			crl::on_main(this, [=] {
+				if (panel && panel != _active) {
+					activate(panel.data());
+				}
+			});
 		}, _tabs->lifetime());
 		_tabs->show();
 	}

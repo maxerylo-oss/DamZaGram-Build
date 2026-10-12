@@ -324,7 +324,7 @@ HistoryItem *ResolveMessage(
 		return nullptr;
 	}
 	const auto id = PeerIdFromString(peerId);
-	if (!id) {
+	if (!id || !(std::abs(msgId) < 9e18)) { // NaN and huge ids from JS
 		return nullptr;
 	}
 	return session->data().message(id, MsgId(int64(msgId)));

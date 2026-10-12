@@ -254,6 +254,16 @@ eq(dzg.accounts.switchTo(0), true);
 eq(sandbox.last('accounts_switchTo').args, [0]);
 dzg.accounts.switchTo({ index: 2 });
 eq(sandbox.last('accounts_switchTo').args, [2]);
+dzg.accounts.switchTo('2');
+eq(sandbox.last('accounts_switchTo').args, [2]);
+{
+  // A missing entry must not become account 0 (Number(null) === 0).
+  const before = sandbox.called('accounts_switchTo').length;
+  for (const bad of [null, undefined, '', ' ', false, {}, { index: null }, 1.5, NaN, 'abc']) {
+    eq(dzg.accounts.switchTo(bad), false, 'switchTo(' + String(bad) + ')');
+  }
+  eq(sandbox.called('accounts_switchTo').length, before, 'invalid index never reaches native');
+}
 sandbox.returns.accounts_list = null;
 eq(dzg.accounts.list(), []);
 eq(dzg.accounts.current(), null);

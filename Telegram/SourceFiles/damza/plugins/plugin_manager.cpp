@@ -28,7 +28,6 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
-#include <QtCore/QDirIterator>
 #include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QThread>
@@ -114,6 +113,7 @@ void Manager::start() {
 }
 
 void Manager::shutdown() {
+	++_changing;
 	saveState();
 	_watcher = nullptr;
 	while (!_instances.empty()) {
@@ -215,6 +215,11 @@ std::vector<PluginState> Manager::scanDirectory() const {
 }
 
 void Manager::refresh() {
+	if (postponeChange([] { Get().refresh(); })) {
+		return;
+	}
+	++_changing;
+	const auto guard = gsl::finally([&] { --_changing; });
 	auto scanned = scanDirectory();
 	const auto same = [](const Manifest &a, const Manifest &b) {
 		return (a.dir == b.dir)
@@ -246,6 +251,11 @@ void Manager::refresh() {
 }
 
 void Manager::rescan() {
+	if (postponeChange([] { Get().rescan(); })) {
+		return;
+	}
+	++_changing;
+	const auto guard = gsl::finally([&] { --_changing; });
 	while (!_instances.empty()) {
 		unloadPlugin(_instances.back()->manifest().id);
 	}
@@ -320,7 +330,31 @@ void Manager::notifyChanged() {
 	_pluginsChanges.fire({});
 }
 
+bool Manager::postponeChange(Fn<void()> change) {
+	// WHY: freeing a runtime while its JS is on the stack (a synthetic
+	// click on a settings button, an "unload" handler) is a use-after-free,
+	// so loading and unloading wait for the stack to unwind.
+	const auto busy = (_changing > 0)
+		|| ranges::any_of(_instances, [](const auto &instance) {
+			return instance->busy();
+		});
+	if (!busy) {
+		return false;
+	}
+	crl::on_main([=] {
+		if (Exists()) {
+			change();
+		}
+	});
+	return true;
+}
+
 void Manager::setEnabled(const QString &id, bool enabled) {
+	if (postponeChange([=] { Get().setEnabled(id, enabled); })) {
+		return;
+	}
+	++_changing;
+	const auto guard = gsl::finally([&] { --_changing; });
 	_enabled[id] = enabled;
 	saveState();
 	for (auto &state : _plugins) {
@@ -346,6 +380,11 @@ void Manager::enableByDefault(const QString &id) {
 }
 
 void Manager::reload(const QString &id) {
+	if (postponeChange([=] { Get().reload(id); })) {
+		return;
+	}
+	++_changing;
+	const auto guard = gsl::finally([&] { --_changing; });
 	for (auto &state : _plugins) {
 		if (state.manifest.id != id) {
 			continue;
@@ -441,17 +480,24 @@ void Manager::watchFiles() {
 	for (const auto &state : _plugins) {
 		const auto root = QDir(state.manifest.dir).absolutePath();
 		auto paths = QStringList{ root };
-		auto it = QDirIterator(
-			root,
-			QDir::AllEntries | QDir::NoDotAndDotDot,
-			QDirIterator::Subdirectories);
-		while (it.hasNext() && paths.size() < kMaxWatchedPerPlugin) {
-			const auto path = it.next();
-			const auto name = it.fileName();
-			if (name.startsWith('.') || name == u"node_modules"_q) {
-				continue;
+		// Breadth first, so files near main.js are watched before the cap.
+		auto folders = QStringList{ root };
+		while (!folders.isEmpty() && paths.size() < kMaxWatchedPerPlugin) {
+			const auto entries = QDir(folders.takeFirst()).entryInfoList(
+				QDir::AllEntries | QDir::NoDotAndDotDot,
+				QDir::Name);
+			for (const auto &entry : entries) {
+				const auto name = entry.fileName();
+				if (name.startsWith('.') || name == u"node_modules"_q) {
+					continue;
+				} else if (paths.size() >= kMaxWatchedPerPlugin) {
+					break;
+				}
+				paths.push_back(entry.absoluteFilePath());
+				if (entry.isDir() && !entry.isSymLink()) {
+					folders.push_back(entry.absoluteFilePath());
+				}
 			}
-			paths.push_back(path);
 		}
 		_watcher->addPaths(paths);
 	}
@@ -541,7 +587,7 @@ void Manager::trackSession(not_null<Main::Session*> session) {
 	session->data().newItemAdded(
 	) | rpl::on_next([=](not_null<HistoryItem*> item) {
 		if (Exists() && !Get()._instances.empty()) {
-			Get().emitEvent(u"message.new"_q, SerializeMessage(item));
+			Get().emitEventLater(u"message.new"_q, SerializeMessage(item));
 		}
 	}, session->lifetime());
 
@@ -554,7 +600,7 @@ void Manager::trackSession(not_null<Main::Session*> session) {
 		auto &manager = Get();
 		manager._filterCache.erase(update.item->fullId());
 		if (!manager._instances.empty()) {
-			manager.emitEvent(
+			manager.emitEventLater(
 				u"message.edited"_q,
 				SerializeMessage(update.item));
 		}
@@ -581,7 +627,36 @@ void Manager::emitEvent(const QString &event, const QVariant &payload) {
 	}
 }
 
+void Manager::emitEventLater(const QString &event, const QVariant &payload) {
+	_queuedEvents.emplace_back(event, payload);
+	if (_queuedEvents.size() > 1) {
+		return;
+	}
+	crl::on_main([] {
+		if (!Exists()) {
+			return;
+		}
+		auto &manager = Get();
+		for (const auto &[name, data] : base::take(manager._queuedEvents)) {
+			manager.emitEvent(name, data);
+		}
+	});
+}
+
 void Manager::invalidateFilters() {
+	if (_refilterScheduled) {
+		return;
+	}
+	_refilterScheduled = true;
+	crl::on_main([] {
+		if (Exists()) {
+			Get().refilterNow();
+		}
+	});
+}
+
+void Manager::refilterNow() {
+	_refilterScheduled = false;
 	auto refresh = std::vector<FullMsgId>();
 	refresh.reserve(_filterCache.size());
 	for (const auto &[id, hidden] : _filterCache) {
@@ -594,18 +669,21 @@ void Manager::invalidateFilters() {
 		return;
 	}
 	auto &data = session->data();
-	for (const auto &id : refresh) {
-		if (const auto item = data.message(id)) {
-			data.requestItemResize(item);
-		}
-	}
 	if (const auto controller = activeController()) {
 		if (const auto history = controller->activeChatCurrent().history()) {
 			for (const auto &block : history->blocks) {
 				for (const auto &view : block->messages) {
-					data.requestItemResize(view->data());
+					refresh.push_back(view->data()->fullId());
 				}
 			}
+		}
+	}
+	ranges::sort(refresh);
+	refresh.erase(ranges::unique(refresh), end(refresh));
+	// Each request may lay the history out again: look items up anew.
+	for (const auto &id : refresh) {
+		if (const auto item = data.message(id)) {
+			data.requestItemResize(item);
 		}
 	}
 }
@@ -678,8 +756,8 @@ bool Manager::filtered(not_null<HistoryItem*> item) {
 	if (const auto i = _filterCache.find(id); i != end(_filterCache)) {
 		return i->second;
 	}
-	if (!IsMainThread()) {
-		return false;
+	if (_filtering || !IsMainThread()) {
+		return false; // a filter made the client lay out messages again
 	}
 	const auto any = ranges::any_of(_instances, [](const auto &instance) {
 		return instance->hasFilter();
@@ -688,6 +766,8 @@ bool Manager::filtered(not_null<HistoryItem*> item) {
 		return false;
 	}
 	const auto payload = QVariant(SerializeMessage(item));
+	_filtering = true;
+	const auto guard = gsl::finally([&] { _filtering = false; });
 	auto hidden = false;
 	for (const auto &instance : _instances) {
 		if (instance->hasFilter()
@@ -722,9 +802,13 @@ bool Manager::beforeSend(Api::MessageToSend &message) {
 	}) | ranges::to_vector;
 	for (const auto &id : ids) {
 		const auto plugin = instance(id);
-		if (!plugin) {
-			continue;
+		if (!plugin || _sendHooksRunning.contains(id)) {
+			continue; // a hook sending with runHooks must not recurse into itself
 		}
+		_sendHooksRunning.emplace(id);
+		const auto running = gsl::finally([&] {
+			_sendHooksRunning.remove(id);
+		});
 		const auto result = plugin->dispatch(u"beforeSend"_q, QVariant(
 			QVariantMap{
 				{ u"text"_q, text },
@@ -753,7 +837,7 @@ bool Manager::beforeSend(Api::MessageToSend &message) {
 
 void Manager::messageDeleted(not_null<HistoryItem*> item) {
 	if (!_instances.empty()) {
-		emitEvent(u"message.deleted"_q, SerializeMessage(item));
+		emitEventLater(u"message.deleted"_q, SerializeMessage(item));
 	}
 }
 
@@ -830,10 +914,6 @@ void Start() {
 		return;
 	}
 	Global = std::unique_ptr<Manager>(new Manager());
-	QObject::connect(
-		QCoreApplication::instance(),
-		&QCoreApplication::aboutToQuit,
-		[] { Shutdown(); });
 	Global->start();
 }
 

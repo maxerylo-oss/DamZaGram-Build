@@ -10,7 +10,7 @@ client installs them into tdata/plugins/<id>/ (see api/api_builtin.cpp).
 Each plugin must have a manifest.json with "id" equal to the folder name,
 a "version" and "builtin": true. Text files are stored as raw string
 chunks below 16000 bytes (MSVC limits a single literal), binary files as
-escaped byte strings. The output is deterministic: run the script after
+escaped byte strings with their sizes (they may contain zero bytes). The output is deterministic: run the script after
 every change in plugins/builtin/ and commit the result.
 
 --check: don't write, exit with 1 if the generated file is out of date.
@@ -115,16 +115,18 @@ def escape_bytes(data):
 
 
 def literals(data):
+    """(literals, sizes): sizes is None for text, else the byte size of
+    every binary chunk (it may contain zero bytes, so no strlen())."""
     try:
         text = data.decode('utf-8')
         if '\0' in text:
             raise UnicodeDecodeError('utf-8', data, 0, 1, 'NUL')
     except UnicodeDecodeError:
-        return ['"%s"' % escape_bytes(data[i:i + BINARY_CHUNK])
-                for i in range(0, len(data), BINARY_CHUNK)] or ['""']
+        chunks = [data[i:i + BINARY_CHUNK] for i in range(0, len(data), BINARY_CHUNK)] or [b'']
+        return ['"%s"' % escape_bytes(chunk) for chunk in chunks], [len(chunk) for chunk in chunks]
     text = text.replace('\r\n', '\n')
     delimiter = delimiter_for(text)
-    return ['R"%s(%s)%s"' % (delimiter, chunk, delimiter) for chunk in text_chunks(text)]
+    return ['R"%s(%s)%s"' % (delimiter, chunk, delimiter) for chunk in text_chunks(text)], None
 
 
 def generate(plugins):
@@ -146,14 +148,19 @@ def generate(plugins):
         for relative, data in files:
             name = 'kFile%d' % index
             index += 1
+            chunks, sizes = literals(data)
             out.append('// %s' % relative)
             out.append('const char *const %s[] = {' % name)
-            for literal in literals(data):
+            for literal in chunks:
                 out.append(literal + ',')
             out.append('nullptr,')
             out.append('};')
+            if sizes is not None:
+                out.append('const int %sSizes[] = { %s };' % (name, ', '.join(str(n) for n in sizes)))
+                entries.append('\t\t{ "%s", %s, %sSizes },' % (relative, name, name))
+            else:
+                entries.append('\t\t{ "%s", %s },' % (relative, name))
             out.append('')
-            entries.append('\t\t{ "%s", %s },' % (relative, name))
     out += [
         '} // namespace',
         '',

@@ -65,7 +65,12 @@ export function parseWhen(input, nowMs) {
     matched = true;
     text = text.slice(m[0].length).trimStart();
   }
-  if (matched) return total > 0 ? { at: now.getTime() + Math.round(total), rest: text } : null;
+  // Не дальше ста лет: иначе дата вне диапазона Date и время не сохранится.
+  const sane = (at) => Number.isFinite(at) && at - now.getTime() < 100 * 365 * 86400000;
+  if (matched) {
+    const at = now.getTime() + Math.round(total);
+    return (total > 0 && sane(at)) ? { at, rest: text } : null;
+  }
 
   const tokens = text.split(/\s+/);
   const take = (n) => tokens.slice(n).join(' ');
@@ -105,7 +110,8 @@ export function parseWhen(input, nowMs) {
 
   // Просто число — минуты.
   if (/^\d+$/.test(tokens[0] || '') && Number(tokens[0]) > 0) {
-    return { at: now.getTime() + Number(tokens[0]) * 60000, rest: take(1) };
+    const at = now.getTime() + Number(tokens[0]) * 60000;
+    return sane(at) ? { at, rest: take(1) } : null;
   }
   return null;
 }
@@ -180,12 +186,16 @@ function snooze(id, ms) {
 
 let timer = 0;
 
+// Напоминание без числового времени (испорченный storage) считается
+// наступившим: иначе таймер крутился бы с нулевой задержкой вечно.
+const dueAt = (item) => Number(item.at) || 0;
+
 function schedule() {
   clearTimeout(timer);
   timer = 0;
   const list = items();
   if (!list.length) return;
-  const next = Math.min(...list.map((i) => i.at));
+  const next = Math.min(...list.map(dueAt));
   // Короткий шаг: таймер не уплывёт после сна компьютера.
   const delay = Math.max(0, Math.min(MAX_TIMER, next - Date.now()));
   timer = setTimeout(tick, delay);
@@ -197,10 +207,12 @@ function fire(item, late) {
   };
   const where = item.chatName ? ' · ' + item.chatName : '';
   const text = item.text + (late ? '\n(пропущено, должно было сработать ' + formatAt(item.at) + ')' : '');
+  // notify — тоже всплывающее окно в клиенте: второй тост с тем же текстом не нужен.
   if (dzg.ui.notify) {
     dzg.ui.notify({ title: '⏰ Напоминание' + where, text, onClick: open, silent: !!setting('silent', false) });
+  } else {
+    dzg.ui.toast(text, '⏰ Напоминание');
   }
-  dzg.ui.toast(text, '⏰ Напоминание');
   if (setting('sendToSaved', false) && dzg.users && dzg.users.self) {
     const self = dzg.users.self();
     const link = item.peerId && item.msgId && dzg.messages.link ? dzg.messages.link(item.peerId, item.msgId) : null;
@@ -210,15 +222,28 @@ function fire(item, late) {
 
 function tick() {
   timer = 0;
-  const now = Date.now();
-  const list = items();
-  const due = list.filter((i) => i.at <= now + 500);
-  if (due.length) {
-    for (const item of due) fire(item, now - item.at > 2 * 60 * 1000);
-    dzg.storage.set(ITEMS_KEY, list.filter((i) => i.at > now + 500));
-    if (panel && panel.isOpen()) render();
+  try {
+    const now = Date.now();
+    const list = items();
+    const isDue = (i) => dueAt(i) <= now + 500;
+    const due = list.filter(isDue);
+    if (due.length) {
+      // Сначала убираем из хранилища: fire() может отправить сообщение
+      // (а с ним — события другим плагинам), и упавшее напоминание не
+      // должно срабатывать снова на каждом шаге.
+      dzg.storage.set(ITEMS_KEY, list.filter((i) => !isDue(i)));
+      for (const item of due) {
+        try {
+          fire(item, now - dueAt(item) > 2 * 60 * 1000);
+        } catch (e) {
+          console.error('Напоминание «' + item.text + '» не показалось:', e);
+        }
+      }
+      if (panel && panel.isOpen()) render();
+    }
+  } finally {
+    schedule();
   }
-  schedule();
 }
 
 // --- Панель ---------------------------------------------------------------

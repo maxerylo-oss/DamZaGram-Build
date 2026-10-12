@@ -65,3 +65,51 @@ assert(file && mock.files[file].includes('секрет'), 'exported');
 mock.click(panel, 'Очистить журнал');
 await mock.tick();
 eq(sandbox.storage.log.length, 0);
+
+// A burst (history cleared): the journal is written once, not per message,
+// and only one notification comes.
+sandbox.settings.systemNotify = true;
+let writes = 0;
+const realStorageSet = sandbox.native.storageSet;
+sandbox.native.storageSet = (key, value) => { if (key === 'log') writes++; sandbox.storage[key] = value; };
+const before = mock.notifications.length;
+sandbox.reset();
+for (let i = 0; i < 500; ++i) {
+  sandbox.event('message.deleted', mock.message({ id: 1000 + i, chat: user, fromName: 'Вася', text: 'х' + i }));
+}
+eq(writes, 0, 'nothing written during the burst');
+assert(sandbox.called('settings').length <= 500, 'one settings read per event: ' + sandbox.called('settings').length);
+assert(sandbox.called('storageGet').length === 0, 'no storage reads per event');
+mock.command('/deleted');
+assert(mock.panelText(mock.lastPanel()).includes('х499'), 'unsaved entries are visible');
+sandbox.runTimers();
+eq(writes, 1, 'one write for the whole burst');
+eq(sandbox.storage.log.length, 300, 'log trimmed to logSize');
+eq(mock.notifications.length, before + 1, 'one notification for the burst');
+assert(mock.notifications[before].title.includes('Удалено 500'), mock.notifications[before].title);
+delete sandbox.native.storageSet;
+if (realStorageSet) sandbox.native.storageSet = realStorageSet;
+
+// Deletions in many chats at once: one summary instead of a pile.
+sandbox.settings.onlyPrivate = false;
+const groups = [1, 2, 3, 4, 5].map((n) => mock.peer(2000 + n, 'Группа ' + n, 'group'));
+for (const g of groups) {
+  sandbox.event('message.deleted', mock.message({ chat: g, peerId: g.id, fromName: 'Спамер', text: 'спам' }));
+}
+sandbox.runTimers();
+eq(mock.notifications.length, before + 2, 'one summary for 5 chats');
+assert(mock.notifications[before + 1].title.includes('в 5 чатах'), mock.notifications[before + 1].title);
+
+// A never-ending stream still notifies within MAX_WAIT.
+const realNow = Date.now;
+let fake = realNow();
+Date.now = () => fake;
+sandbox.reset();
+for (let i = 0; i < 20; ++i) {
+  fake += 1000;
+  sandbox.event('message.deleted', mock.message({ id: 3000 + i, chat: user, fromName: 'Вася', text: 'поток' }));
+}
+const delays = sandbox.called('startTimer').map((c) => c.args[0]);
+assert(delays[delays.length - 1] === 0, 'flush is due after MAX_WAIT: ' + JSON.stringify(delays));
+Date.now = realNow;
+sandbox.runTimers();

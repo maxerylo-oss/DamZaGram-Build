@@ -219,6 +219,27 @@ sandbox.dispatch('ui:panelClosed', { id: 21 });
 eq(secondCloses, 1);
 assert(!second.isOpen(), 'closed by the client');
 
+// The window with the panel was closed: the client reports it from the
+// event loop, possibly after the plugin already opened a new panel.
+sandbox.native.ui_panelOpen = () => ({ id: 31, content: 32, reused: false });
+const inClosedWindow = dzg.ui.panel({ title: 'Old window' });
+let oldCloses = 0;
+inClosedWindow.on('close', () => ++oldCloses);
+sandbox.native.ui_panelOpen = () => ({ id: 41, content: 42, reused: false });
+const inNextWindow = dzg.ui.panel({ title: 'Next window' });
+assert(inNextWindow !== inClosedWindow, 'new native panel, new object');
+let nextCloses = 0;
+inNextWindow.on('close', () => ++nextCloses);
+sandbox.dispatch('ui:panelClosed', { id: 31 });
+eq(oldCloses, 1, 'late close reaches the old panel');
+assert(!inClosedWindow.isOpen(), 'old panel closed');
+eq(nextCloses, 0, 'new panel untouched');
+assert(inNextWindow.isOpen(), 'new panel still open');
+sandbox.native.ui_panelOpen = () => ({ id: 41, content: 42, reused: true });
+assert(dzg.ui.panel() === inNextWindow, 'new panel is still the current one');
+sandbox.dispatch('ui:panelClosed', { id: 41 });
+eq(nextCloses, 1);
+
 sandbox.native.ui_panelOpen = () => null;
 throws(() => dzg.ui.panel({ title: 'x' }), 'no main window');
 

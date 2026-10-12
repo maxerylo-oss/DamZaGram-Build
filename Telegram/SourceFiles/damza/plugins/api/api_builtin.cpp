@@ -41,8 +41,13 @@ struct BuiltinState {
 
 [[nodiscard]] QByteArray Contents(const Builtin::File &file) {
 	auto result = QByteArray();
-	for (auto chunk = file.chunks; chunk && *chunk; ++chunk) {
-		result.append(*chunk);
+	for (auto i = 0; file.chunks && file.chunks[i]; ++i) {
+		// Binary chunks may contain zero bytes: they come with sizes.
+		if (file.sizes) {
+			result.append(file.chunks[i], file.sizes[i]);
+		} else {
+			result.append(file.chunks[i]);
+		}
 	}
 	return result;
 }
@@ -110,6 +115,21 @@ struct Version {
 	return file.commit();
 }
 
+// A symlink (or a Windows junction) anywhere on the way to a plugin file
+// is a developer's live copy: QSaveFile would write through it.
+[[nodiscard]] bool LinkedPath(const QString &root, const QString &relative) {
+	auto path = root;
+	for (const auto &part : relative.split('/')) {
+		path += part;
+		const auto info = QFileInfo(path);
+		if (info.isSymLink() || info.isJunction()) {
+			return true;
+		}
+		path += '/';
+	}
+	return false;
+}
+
 [[nodiscard]] QString PluginIdOf(const Builtin::File &file) {
 	const auto path = QString::fromUtf8(file.path);
 	return path.left(path.indexOf('/'));
@@ -145,7 +165,10 @@ void InstallBuiltins() {
 		};
 		const auto target = root + manifestPath;
 		// A symlink is a developer's live copy: never write through it.
-		const auto linked = QFileInfo(root + id).isSymLink();
+		const auto linked = ranges::any_of(files, [&](
+				const Builtin::File *f) {
+			return LinkedPath(root, QString::fromUtf8(f->path));
+		});
 		auto install = !linked && !QFile::exists(target);
 		if (QFile::exists(target)) {
 			const auto installed = ReadObject(target);
@@ -161,12 +184,14 @@ void InstallBuiltins() {
 			}
 		}
 		if (install) {
-			auto ok = true;
-			for (const auto file : files) {
-				ok = WriteFile(
+			// The manifest goes last: stop at the first failure, so that a
+			// half-written plugin keeps the old version and is retried.
+			const auto ok = ranges::all_of(files, [&](
+					const Builtin::File *file) {
+				return WriteFile(
 					root + QString::fromUtf8(file->path),
-					Contents(*file)) && ok;
-			}
+					Contents(*file));
+			});
 			if (ok) {
 				state.installedVersion = state.version;
 				state.updated = true;

@@ -1,4 +1,4 @@
-import { fuzzyScore, switchLayout, search } from '../../../../plugins/builtin/command-palette/main.js';
+import { fuzzyScore, switchLayout, search, layoutAlternative } from '../../../../plugins/builtin/command-palette/main.js';
 
 const { eq, assert } = sandbox;
 
@@ -12,6 +12,12 @@ assert(fuzzyScore('xyz', 'Вася') < 0);
 
 // Registration.
 assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+Shift+K'), 'Ctrl+Shift+K registered');
+// In the Russian layout the same key arrives as "Л": bound too.
+eq(layoutAlternative('Ctrl+Shift+K'), 'Ctrl+Shift+Л');
+eq(layoutAlternative('Alt+p'), 'Alt+З');
+eq(layoutAlternative('Ctrl+Shift+Space'), null);
+eq(layoutAlternative('Ctrl+1'), null);
+assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+Shift+Л' && !s.removed), 'Ctrl+Shift+Л registered');
 assert(mock.mainMenu.some((m) => m.title === 'Командная палитра'), 'main menu item');
 assert(dzg.commands.list().some((c) => c.name === 'palette'), '/palette registered');
 
@@ -65,6 +71,12 @@ mock.click(panel, 'папки');
 await mock.tick();
 eq(mock.links[mock.links.length - 1], 'tg://settings/folders');
 
+// The layout twin toggles the palette as well.
+mock.shortcut('Ctrl+Shift+Л');
+assert(mock.lastPanel().open, 'opened by Ctrl+Shift+Л');
+mock.shortcut('Ctrl+Shift+Л');
+assert(!mock.lastPanel().open, 'closed by Ctrl+Shift+Л');
+
 // Toggle: the shortcut closes an open palette.
 mock.shortcut('Ctrl+Shift+K');
 panel = mock.lastPanel();
@@ -87,6 +99,8 @@ sandbox.settings.shortcut = 'Ctrl+Shift+P';
 sandbox.event('settings.changed', { key: 'shortcut', value: 'Ctrl+Shift+P' });
 assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+Shift+P' && !s.removed), 'new shortcut');
 assert(mock.shortcuts.filter((s) => s.keys === 'Ctrl+Shift+K').every((s) => s.removed), 'old shortcut removed');
+assert(mock.shortcuts.filter((s) => s.keys === 'Ctrl+Shift+Л').every((s) => s.removed), 'old layout twin removed');
+assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+Shift+З' && !s.removed), 'new layout twin');
 
 // Plugins are toggled from the palette.
 mock.shortcut('Ctrl+Shift+P');
@@ -125,3 +139,11 @@ const toasts = mock.toasts.length;
 sandbox.event('ready');
 sandbox.runTimers();
 eq(mock.toasts.length, toasts, 'welcome only once');
+
+// Typing reads the usage history once per query, not once per item.
+mock.shortcut('Ctrl+Shift+P');
+panel = mock.lastPanel();
+sandbox.reset();
+mock.type(panel, 'ва');
+eq(sandbox.called('storageGet').filter((c) => c.args[0] === 'recent').length, 1, 'one read per keystroke');
+mock.shortcut('Ctrl+Shift+P');

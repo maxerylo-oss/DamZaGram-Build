@@ -236,7 +236,7 @@ interface MessagesButtonAnswer {
 
 interface DzgMessages {
   send(peer: PeerId | Peer, text: string, options?: MessagesSendOptions): boolean;
-  /** Изменить текст. Возвращает false, если сообщение не найдено. */
+  /** Изменить текст. Возвращает false, если сообщение не найдено, ещё не отправлено или это предложенный пост, ждущий ответа. */
   edit(peer: PeerId | Peer, messageId: number, text: string, options?: MessagesEditOptions): boolean;
 
   /** Разобрать Markdown (по умолчанию) или HTML в текст и форматирование. */
@@ -255,6 +255,7 @@ interface DzgMessages {
   fetch(peer: PeerId | Peer, messageId: number): Promise<Message | null>;
   fetch(peer: PeerId | Peer, messageIds: number[]): Promise<Message[]>;
 
+  /** Переслать одно или несколько сообщений в другой чат. Служебные (и звонки) и неотправленные пропускаются; если переслать нечего — MESSAGE_NOT_FORWARDABLE. */
   forward(fromPeer: PeerId | Peer, ids: number | Message | (number | Message)[], toPeer: PeerId | Peer, options?: MessagesForwardOptions): Promise<void>;
   /** Поставить реакцию. null — убрать свои реакции. Премиум-эмодзи — строкой с id. */
   react(peer: PeerId | Peer, messageId: number, emoji: string | null, options?: { addToRecent?: boolean }): Promise<void>;

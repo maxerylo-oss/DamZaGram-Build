@@ -2,8 +2,10 @@
 // a fork of AyuGram for Desktop.
 #include "damza/plugins/plugin_install.h"
 
+#include "base/flat_set.h"
 #include "base/zlib_help.h"
 #include "damza/damza_lang.h"
+#include "damza/plugins/builtin/builtin_files.h"
 #include "damza/plugins/plugin_manager.h"
 #include "damza/plugins/plugin_types_embedded.h"
 
@@ -83,6 +85,14 @@ const auto kSkipDirs = std::array{
 	return name;
 }
 
+[[nodiscard]] bool IsLoopbackHost(const QString &host) {
+	const auto lower = host.toLower();
+	return (lower == u"localhost"_q)
+		|| lower.endsWith(u".localhost"_q)
+		|| (lower == u"127.0.0.1"_q)
+		|| (lower == u"::1"_q);
+}
+
 [[nodiscard]] QString SourceBaseName(const QString &source) {
 	const auto url = QUrl(source);
 	const auto path = (url.isValid() && !url.scheme().isEmpty()
@@ -99,7 +109,9 @@ void Finalize(Package &package) {
 	const auto id = package.id();
 	if (id.isEmpty()) {
 		package.error = Damza::Text("manifest.json has no \"id\".", "В manifest.json нет \"id\".");
-	} else if (!IsValidPluginId(id)) {
+	} else if (!IsValidPluginId(id)
+		|| package.manifest.value(u"id"_q).toString() != id) {
+		// The client reads the id from manifest.json as is, untrimmed.
 		package.error = Damza::Text(
 			"Bad plugin id \"%1\": use latin letters, digits, "
 			"'-', '_' and '.'.",
@@ -158,6 +170,30 @@ void Finalize(Package &package) {
 	const auto root = QDir(Manager::Get().pluginsPath()).absolutePath();
 	const auto path = QDir(dir).absolutePath();
 	return path.startsWith(root + '/') && path != root;
+}
+
+// A plugin folder that is a symlink (or a junction) is a developer's live
+// copy: QDir::removeRecursively() would wipe the folder it points to.
+[[nodiscard]] bool IsLink(const QString &path) {
+	const auto info = QFileInfo(path);
+	return info.isSymLink() || info.isJunction();
+}
+
+// Removes the link itself, never the files it points to.
+[[nodiscard]] bool RemoveLink(const QString &path) {
+	return QFile::remove(path) || QDir().rmdir(path);
+}
+
+[[nodiscard]] bool IsShippedBuiltin(const QString &id) {
+	static const auto ids = [] {
+		auto result = base::flat_set<QString>();
+		for (const auto &file : Builtin::Files()) {
+			const auto path = QString::fromUtf8(file.path);
+			result.emplace(path.left(path.indexOf('/')));
+		}
+		return result;
+	}();
+	return !id.isEmpty() && ids.contains(id);
 }
 
 [[nodiscard]] QString CommandName(const QString &id) {
@@ -457,7 +493,8 @@ Package ReadPackageFromDirectory(const QString &path) {
 			QDir::Files);
 		if (scripts.size() == 1) {
 			auto file = QFile(dir.filePath(scripts.front()));
-			if (file.open(QIODevice::ReadOnly)) {
+			if (file.size() <= kMaxFileSize
+				&& file.open(QIODevice::ReadOnly)) {
 				return ReadPackageFromScript(
 					file.readAll(),
 					dir.filePath(scripts.front()));
@@ -686,6 +723,17 @@ void DownloadPackage(const QString &url, Fn<void(Package)> done) {
 			.error = Damza::Text("Bad link: %1", "Неверная ссылка: %1").arg(url),
 		});
 		return;
+	} else if (scheme == u"http"_q && !IsLoopbackHost(parsed.host())) {
+		// Plugin code over plain http can be swapped on the way.
+		done(Package{
+			.source = url,
+			.error = Damza::Text(
+				"Only https:// links are allowed (http:// only for "
+				"localhost): %1",
+				"Разрешены только ссылки https:// (http:// — только для "
+				"localhost): %1").arg(url),
+		});
+		return;
 	}
 	if (!Manager::Exists()) {
 		done(Package{ .source = url, .error = Damza::Text("Plugins are off.", "Система плагинов выключена.") });
@@ -700,16 +748,24 @@ void DownloadPackage(const QString &url, Fn<void(Package)> done) {
 		u"DamZaGram plugin installer"_q);
 	request.setTransferTimeout(kDownloadTimeout);
 	const auto reply = Manager::Get().network()->get(request);
+	const auto tooLarge = std::make_shared<bool>(false);
 	QObject::connect(reply, &QNetworkReply::downloadProgress, [=](
 			qint64 received,
 			qint64 total) {
 		if (received > kMaxPackageSize || total > kMaxPackageSize) {
+			*tooLarge = true;
 			reply->abort();
 		}
 	});
 	QObject::connect(reply, &QNetworkReply::finished, [=] {
 		reply->deleteLater();
-		if (reply->error() != QNetworkReply::NoError) {
+		if (*tooLarge) {
+			done(Package{
+				.source = normalized,
+				.error = Damza::Text("The plugin is too large.", "Плагин слишком большой."),
+			});
+			return;
+		} else if (reply->error() != QNetworkReply::NoError) {
 			done(Package{
 				.source = normalized,
 				.error = reply->errorString(),
@@ -747,7 +803,9 @@ bool IsBuiltinDirectory(const QString &dir) {
 		return false;
 	}
 	const auto root = QJsonDocument::fromJson(file.readAll()).object();
-	return root.value(u"builtin"_q).toBool();
+	// A foreign plugin copying "builtin": true must stay removable.
+	const auto id = root.value(u"id"_q).toString(QDir(dir).dirName());
+	return root.value(u"builtin"_q).toBool() && IsShippedBuiltin(id);
 }
 
 bool IsBuiltinPlugin(const QString &id) {
@@ -779,6 +837,15 @@ InstallResult InstallPackage(const Package &package, bool enable) {
 		: QDir(manager.pluginsPath()).filePath(id);
 	if (existing && !InsidePluginsFolder(target)) {
 		return { .error = Damza::Text("Bad plugin folder: %1", "Неверная папка плагина: %1").arg(target) };
+	} else if (IsLink(target)) {
+		return { .error = Damza::Text(
+			"The plugin folder is a link, update the files it points "
+			"to yourself: %1",
+			"Папка плагина — ссылка, обнови файлы, на которые она "
+			"указывает, сам: %1").arg(target) };
+	} else if (!existing && QFileInfo::exists(target)) {
+		// Another plugin (with a different id) or someone's files.
+		return { .error = Damza::Text("The folder is taken: %1", "Папка уже занята: %1").arg(target) };
 	}
 	const auto staging = manager.dataPath() + u"_staging/"_q + id;
 	QDir(staging).removeRecursively();
@@ -800,6 +867,11 @@ InstallResult InstallPackage(const Package &package, bool enable) {
 	if (updated) {
 		manager.reload(id);
 	} else {
+		if (!enable) {
+			// The state may remember the id as enabled (a folder deleted
+			// by hand): "Enable right away" off must not run its code.
+			manager.setEnabled(id, false);
+		}
 		manager.refresh();
 	}
 	if (enable && !wasEnabled) {
@@ -824,8 +896,10 @@ bool UninstallPlugin(const QString &id, bool removeData, QString *error) {
 		return false;
 	}
 	manager.setEnabled(id, false);
-	const auto removed = QDir(dir).removeRecursively();
-	if (removed && removeData) {
+	const auto removed = IsLink(dir)
+		? RemoveLink(dir)
+		: QDir(dir).removeRecursively();
+	if (removed && removeData && IsValidPluginId(id)) {
 		QFile::remove(PluginDataFile(id));
 	}
 	manager.refresh();
@@ -891,6 +965,11 @@ QString EnsureScratchPlugin(QString *error) {
 	auto &manager = Manager::Get();
 	if (!FindPlugin(id)) {
 		const auto dir = QDir(manager.pluginsPath()).filePath(id);
+		if (QFileInfo::exists(dir) || IsLink(dir)) {
+			// Never overwrite main.js of a folder that is not the scratchpad.
+			*error = Damza::Text("The folder is taken: %1", "Папка уже занята: %1").arg(dir);
+			return QString();
+		}
 		const auto manifest = QJsonObject{
 			{ u"id"_q, id },
 			{ u"name"_q, u"DevTools scratchpad"_q },

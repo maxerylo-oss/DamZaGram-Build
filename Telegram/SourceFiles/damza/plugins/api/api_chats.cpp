@@ -173,7 +173,10 @@ void AppendEntryFields(
 		const QVariantMap &options) {
 	const auto folder = options.value(u"folder"_q);
 	const auto limit = options.contains(u"limit"_q)
-		? int(options.value(u"limit"_q).toDouble())
+		? int(std::clamp(
+			options.value(u"limit"_q).toDouble(),
+			0.,
+			double(std::numeric_limits<int>::max())))
 		: kDefaultListLimit;
 	const auto unreadOnly = options.value(u"unreadOnly"_q).toBool();
 	const auto types = options.value(u"types"_q).toStringList();
@@ -667,12 +670,13 @@ void Members(
 		not_null<PeerData*> peer,
 		const QVariantMap &options,
 		Pending pending) {
-	const auto limit = std::clamp(
+	// Clamp as double: a huge limit must not overflow the int conversion.
+	const auto limit = int(std::clamp(
 		options.contains(u"limit"_q)
-			? int(options.value(u"limit"_q).toDouble())
-			: kMembersPage,
-		1,
-		kMembersMax);
+			? options.value(u"limit"_q).toDouble()
+			: double(kMembersPage),
+		1.,
+		double(kMembersMax)));
 	const auto query = options.value(u"query"_q).toString().trimmed();
 	if (const auto channel = peer->asChannel()) {
 		LoadChannelMembers(
@@ -1128,7 +1132,13 @@ void CreateInviteLink(
 }
 
 bool ClearHistory(not_null<PeerData*> peer, bool revoke) {
-	peer->session().api().clearHistory(peer, revoke);
+	// Clearing destroys the loaded items right away, while plugin code
+	// often runs inside a client callback that still uses one of them
+	// (message.new is fired from History::newItemAdded, for example).
+	const auto session = &peer->session();
+	crl::on_main(session, [=] {
+		session->api().clearHistory(peer, revoke);
+	});
 	return true;
 }
 
@@ -1136,9 +1146,25 @@ struct TypingSeen {
 	QString action;
 	crl::time emitted = 0;
 	crl::time updated = 0;
+	// When the pending ExpireTyping() check runs, one per key.
+	crl::time expireAt = 0;
 };
 
-using TypingKey = std::tuple<uint64, PeerId, PeerId>;
+// Session, chat, user, topic: like the client's own send actions,
+// typing in different topics of a forum are separate.
+using TypingKey = std::tuple<uint64, PeerId, PeerId, MsgId>;
+
+[[nodiscard]] TypingKey MakeTypingKey(
+		not_null<History*> history,
+		MsgId rootId,
+		not_null<UserData*> user) {
+	return {
+		history->session().uniqueId(),
+		history->peer->id,
+		user->id,
+		rootId,
+	};
+}
 
 [[nodiscard]] base::flat_map<TypingKey, TypingSeen> &TypingMap() {
 	static auto result = base::flat_map<TypingKey, TypingSeen>();
@@ -1179,16 +1205,29 @@ void EmitTyping(
 void ExpireTyping(
 		not_null<History*> history,
 		MsgId rootId,
-		not_null<UserData*> user,
-		TypingKey key) {
+		not_null<UserData*> user) {
 	auto &map = TypingMap();
-	const auto i = map.find(key);
-	if (i == end(map)
-		|| i->second.action == u"cancel"_q
-		|| (crl::now() - i->second.updated < kTypingExpire - 100)) {
+	const auto i = map.find(MakeTypingKey(history, rootId, user));
+	if (i == end(map)) {
 		return;
 	}
-	i->second.action = u"cancel"_q;
+	auto &seen = i->second;
+	seen.expireAt = 0;
+	if (seen.action == u"cancel"_q) {
+		return;
+	}
+	// Repeats skipped by kTypingRepeat still move `updated`: wait for them,
+	// otherwise the action would never be cancelled.
+	const auto now = crl::now();
+	const auto left = seen.updated + kTypingExpire - now;
+	if (left > 100) {
+		seen.expireAt = now + left;
+		base::call_delayed(left, &history->session(), [=] {
+			ExpireTyping(history, rootId, user);
+		});
+		return;
+	}
+	seen.action = u"cancel"_q;
 	EmitTyping(history, rootId, user, u"cancel"_q);
 }
 
@@ -1263,12 +1302,7 @@ void ChatSendActionReceived(
 	const auto session = &history->session();
 	const auto now = crl::now();
 	ForgetOldTyping(now);
-	const auto key = TypingKey{
-		session->uniqueId(),
-		history->peer->id,
-		user->id,
-	};
-	auto &seen = TypingMap()[key];
+	auto &seen = TypingMap()[MakeTypingKey(history, rootId, user)];
 	seen.updated = now;
 	const auto cancel = (name == u"cancel"_q);
 	if (cancel) {
@@ -1281,10 +1315,16 @@ void ChatSendActionReceived(
 	}
 	seen.action = name;
 	seen.emitted = now;
+	// A pending check reschedules itself while updates keep coming.
+	const auto schedule = !cancel && (seen.expireAt <= now);
+	if (schedule) {
+		seen.expireAt = now + kTypingExpire;
+	}
+	// Handlers may change the map, `seen` is not used after this.
 	EmitTyping(history, rootId, user, name);
-	if (!cancel) {
+	if (schedule) {
 		base::call_delayed(kTypingExpire, session, [=] {
-			ExpireTyping(history, rootId, user, key);
+			ExpireTyping(history, rootId, user);
 		});
 	}
 }

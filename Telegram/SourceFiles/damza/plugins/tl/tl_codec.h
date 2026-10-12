@@ -21,6 +21,11 @@ using Buffer = QVector<Prime>;
 struct EncodeOptions {
 	// Returns the TL object, an error text as a string, or undefined.
 	std::function<QJsonValue(const QString &type, const QJsonValue &value)> resolve;
+	// Called for the encoded method and for every nested !X query (like
+	// invokeWithLayer.query), returns an error text to refuse the call.
+	std::function<QString(
+		const Combinator &method,
+		const QJsonObject &params)> check;
 	bool defaults = true;
 };
 

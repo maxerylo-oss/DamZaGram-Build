@@ -14,8 +14,16 @@
 namespace Damza::Tl {
 namespace {
 
-constexpr auto kMaxDepth = 200;
+// Real TL data nests a few dozen levels at most (Instant View pages). An
+// Encoder level takes ~3 KB of stack, and the main thread has only 1 MB on
+// Windows, shared with the JS engine that called us.
+constexpr auto kMaxDepth = 100;
 constexpr auto kMaxSafeInteger = 9007199254740991.;
+constexpr auto kMaxBytesLength = 0xFFFFFF;
+// MTProto never nests gzip_packed, the limits stop gzip "quines" and bombs
+// in dzg.api.decode() input from recursing or allocating without bound.
+constexpr auto kMaxGzipNesting = 2;
+constexpr auto kMaxUnpackedTotal = qint64(64 * 1024 * 1024);
 
 [[nodiscard]] QString JoinPath(const QString &path, const QString &key) {
 	return path.isEmpty() ? key : (path + QLatin1Char('.') + key);
@@ -118,9 +126,11 @@ private:
 		std::memcpy(&bits, &value, 8);
 		putLong(qint64(bits));
 	}
-	void putBytes(const QByteArray &data) {
+	bool putBytes(const QByteArray &data, const QString &path) {
 		const auto size = int(data.size());
-		if (size < 254) {
+		if (size > kMaxBytesLength) {
+			return fail(path, QStringLiteral("%1 bytes is too long for TL").arg(size));
+		} else if (size < 254) {
 			_bytes.append(char(size));
 			_bytes.append(data);
 			pad(size + 1);
@@ -132,6 +142,7 @@ private:
 			_bytes.append(data);
 			pad(size + 4);
 		}
+		return true;
 	}
 	void pad(int written) {
 		while (written % 4) {
@@ -284,21 +295,20 @@ bool Encoder::value(
 	}
 	case TypeKind::String: {
 		if (value.isString()) {
-			putBytes(value.toString().toUtf8());
+			return putBytes(value.toString().toUtf8(), path);
 		} else if (value.isDouble()) {
-			putBytes(QString::number(value.toDouble(), 'g', 17).toUtf8());
-		} else {
-			return fail(path, QStringLiteral("string expected, got ") + Describe(value));
+			return putBytes(
+				QString::number(value.toDouble(), 'g', 17).toUtf8(),
+				path);
 		}
-		return true;
+		return fail(path, QStringLiteral("string expected, got ") + Describe(value));
 	}
 	case TypeKind::Bytes: {
 		auto result = QByteArray();
 		if (!toBytes(value, result, path)) {
 			return false;
 		}
-		putBytes(result);
-		return true;
+		return putBytes(result, path);
 	}
 	case TypeKind::Int128:
 	case TypeKind::Int256: {
@@ -451,6 +461,11 @@ bool Encoder::query(const QJsonValue &value, const QString &path) {
 	const auto method = _schema.method(name);
 	if (!method) {
 		return fail(path, QStringLiteral("method call expected like {_: 'help.getConfig'}, got ") + Describe(value));
+	} else if (_options.check) {
+		const auto refused = _options.check(*method, object);
+		if (!refused.isEmpty()) {
+			return fail(path, refused);
+		}
 	}
 	putInt(qint32(method->id));
 	++_depth;
@@ -535,8 +550,11 @@ bool Encoder::fields(
 	for (auto i = 0; i != int(params.size()); ++i) {
 		if (params[i].type.kind == TypeKind::Flags) {
 			const auto given = object.value(params[i].name);
-			if (given.isDouble()) {
-				flags[i] = quint32(qint64(given.toDouble()));
+			const auto number = given.toDouble(-1.);
+			if (given.isDouble()
+				&& number >= -2147483648.
+				&& number <= 4294967295.) {
+				flags[i] = quint32(qint64(number));
 			}
 		}
 	}
@@ -642,13 +660,17 @@ public:
 		const DecodeOptions &options,
 		const Prime *from,
 		const Prime *till,
-		JsonWriter &out)
+		JsonWriter &out,
+		qint64 &unpacked,
+		int gzipNesting = 0)
 	: _schema(schema)
 	, _options(options)
 	, _from(from)
 	, _position(from)
 	, _till(till)
-	, _out(out) {
+	, _out(out)
+	, _unpacked(unpacked)
+	, _gzipNesting(gzipNesting) {
 	}
 
 	bool value(const TypeRef &type, int depth);
@@ -697,6 +719,8 @@ private:
 	const Prime *_position = nullptr;
 	const Prime *_till = nullptr;
 	JsonWriter &_out;
+	qint64 &_unpacked;
+	int _gzipNesting = 0;
 
 };
 
@@ -731,10 +755,16 @@ bool Decoder::gzipped(const TypeRef &type, int depth) {
 		return false;
 	} else if (!_options.ungzip) {
 		return fail(QStringLiteral("gzip_packed is not supported here"));
+	} else if (_gzipNesting >= kMaxGzipNesting) {
+		return fail(QStringLiteral("gzip_packed is nested too deep"));
 	}
 	const auto unpacked = _options.ungzip(packed);
 	if (unpacked.isEmpty() || (unpacked.size() % 4)) {
 		return fail(QStringLiteral("bad gzip_packed data"));
+	}
+	_unpacked += unpacked.size();
+	if (_unpacked > kMaxUnpackedTotal) {
+		return fail(QStringLiteral("gzip_packed data is too large"));
 	}
 	auto buffer = Buffer(int(unpacked.size() / 4));
 	std::memcpy(buffer.data(), unpacked.constData(), unpacked.size());
@@ -743,7 +773,9 @@ bool Decoder::gzipped(const TypeRef &type, int depth) {
 		_options,
 		buffer.constData(),
 		buffer.constData() + buffer.size(),
-		_out);
+		_out,
+		_unpacked,
+		_gzipNesting + 1);
 	if (!inner.value(type, depth)) {
 		return fail(QStringLiteral("in gzip_packed: ") + inner.error);
 	}
@@ -950,9 +982,15 @@ EncodeResult EncodeMethod(
 			: (QStringLiteral("unknown method '") + method + QLatin1Char('\''));
 		return result;
 	}
-	auto encoder = Encoder(schema, options);
 	auto object = params;
 	object.remove(QStringLiteral("_"));
+	if (options.check) {
+		result.error = options.check(*combinator, object);
+		if (!result.error.isEmpty()) {
+			return result;
+		}
+	}
+	auto encoder = Encoder(schema, options);
 	encoder.putId(combinator->id);
 	if (!encoder.fields(*combinator, object, QString())) {
 		result.error = encoder.error;
@@ -989,7 +1027,8 @@ DecodeResult Decode(
 		const TypeRef &type,
 		const DecodeOptions &options) {
 	auto writer = JsonWriter();
-	auto decoder = Decoder(schema, options, from, till, writer);
+	auto unpacked = qint64();
+	auto decoder = Decoder(schema, options, from, till, writer, unpacked);
 	auto result = DecodeResult();
 	if (!decoder.value(type, 0)) {
 		result.error = decoder.error;

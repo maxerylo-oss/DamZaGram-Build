@@ -19,6 +19,9 @@ eq(parseWhen('завтра', now), { at: at(2026, 9, 13, 9, 0), rest: '' });
 eq(parseWhen('25.12 10:00 подарки', now), { at: at(2026, 11, 25, 10, 0), rest: 'подарки' });
 eq(parseWhen('15 чай', now).at, now + 15 * 60000, 'bare number = minutes');
 eq(parseWhen('бла-бла', now), null);
+eq(parseWhen('9'.repeat(400) + 'm x', now), null, 'infinite duration');
+eq(parseWhen('99999999999w x', now), null, 'out of Date range');
+eq(parseWhen('9'.repeat(400) + ' x', now), null, 'infinite bare minutes');
 eq(formatIn(5400000), '1 ч 30 мин');
 
 // Command adds a persisted reminder.
@@ -39,6 +42,7 @@ Date.now = () => realNow() + 11 * 60000;
 sandbox.runTimers();
 eq(mock.notifications.length, 1);
 assert(mock.notifications[0].text.includes('купить хлеб'));
+assert(!mock.toasts.some((t) => t.startsWith('⏰ Напоминание')), 'no duplicate toast next to the notification');
 mock.notifications[0].onClick();
 eq(mock.opened[0].peerId, '100');
 eq(sandbox.storage.items.length, 0);
@@ -74,3 +78,29 @@ eq(sandbox.storage.items.length, 0);
 // Bad input explains the format.
 mock.command('/remind когда-нибудь');
 assert(mock.toasts[mock.toasts.length - 1].includes('Не понял'));
+
+// A reminder that throws while firing is dropped and the others still fire
+// and re-arm; one without a numeric time doesn't spin a zero-delay timer.
+const realNotify = dzg.ui.notify;
+dzg.ui.notify = (spec) => {
+  if (String(spec.text).includes('сломанное')) throw new Error('boom');
+  realNotify(spec);
+};
+const soon = Date.now() - 1000;
+sandbox.storage.items = [
+  { id: 20, at: soon, text: 'сломанное', peerId: '', chatName: '', msgId: 0, created: 0 },
+  { id: 21, at: soon, text: 'целое', peerId: '', chatName: '', msgId: 0, created: 0 },
+  { id: 22, text: 'без времени', peerId: '', chatName: '', msgId: 0, created: 0 },
+  { id: 23, at: Date.now() + 3600000, text: 'через час', peerId: '', chatName: '', msgId: 0, created: 0 },
+];
+const count = mock.notifications.length;
+sandbox.event('ready');
+sandbox.runTimers();
+eq(sandbox.storage.items.map((i) => i.id), [23], 'due ones removed, future one kept');
+eq(mock.notifications.slice(count).map((n) => n.text.split('\n')[0]), ['целое', 'без времени']);
+sandbox.reset();
+sandbox.runTimers();
+const rearmed = sandbox.called('startTimer');
+eq(rearmed.length, 1, 'timer re-armed once');
+eq(rearmed[0].args[0], 60000, 'next step is the capped delay, not 0');
+dzg.ui.notify = realNotify;

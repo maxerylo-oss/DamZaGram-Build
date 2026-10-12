@@ -103,3 +103,13 @@ mock.httpHandler = () => ({ status: 200, body: { stop_reason: 'refusal', content
 mock.command('/digest 10');
 await mock.tick(60);
 assert(mock.panelText(mock.lastPanel()).includes('отказалась'));
+
+// The key never shows up in an error, even if a proxy echoes it back.
+const key = String(sandbox.settings.apiKey);
+assert(key.length >= 8, 'test key set');
+mock.httpHandler = () => ({ status: 500, body: { error: { message: 'bad header x-api-key: ' + key } } });
+mock.command('/digest 10');
+await mock.tick(60);
+const errorText = mock.panelText(mock.lastPanel());
+assert(errorText.includes('Ошибка API 500') && !errorText.includes(key), errorText);
+assert(!sandbox.calls.some((c) => c.name === 'log' && JSON.stringify(c.args).includes(key)), 'not logged');

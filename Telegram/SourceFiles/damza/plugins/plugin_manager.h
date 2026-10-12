@@ -98,6 +98,9 @@ public:
 
 	// Called by instances.
 	void emitEvent(const QString &event, const QVariant &payload);
+	// From client code that must not run plugin JS right now (loops over
+	// raw item pointers): queued, delivered in order on the next loop.
+	void emitEventLater(const QString &event, const QVariant &payload);
 	void invalidateFilters();
 	void reportError(const QString &id, const QString &error);
 	[[nodiscard]] QNetworkAccessManager *network();
@@ -114,6 +117,8 @@ public:
 
 private:
 	[[nodiscard]] std::vector<PluginState> scanDirectory() const;
+	[[nodiscard]] bool postponeChange(Fn<void()> change);
+	void refilterNow();
 	void scheduleReload(const QString &path);
 	void loadState();
 	void saveState() const;
@@ -141,7 +146,12 @@ private:
 	bool _sendingFromPlugin = false;
 	bool _reloadScheduled = false;
 	bool _rescanScheduled = false;
+	bool _refilterScheduled = false;
+	bool _filtering = false;
+	int _changing = 0;
 	base::flat_set<QString> _reloadIds;
+	base::flat_set<QString> _sendHooksRunning;
+	std::vector<std::pair<QString, QVariant>> _queuedEvents;
 	rpl::lifetime _lifetime;
 
 };

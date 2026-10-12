@@ -74,6 +74,32 @@ using namespace Damza::PluginsUi;
 	return parts.join(u" · "_q);
 }
 
+// Everything a card shows: a plugin reporting the same error again and
+// again must not recreate the cards (and eat clicks) every time.
+[[nodiscard]] QString ListSignature(const QString &query) {
+	// Never empty, so the first rebuild() always runs.
+	auto result = QStringList{ u"plugins"_q, query };
+	for (const auto &state : Manager::Get().plugins()) {
+		const auto &m = state.manifest;
+		const auto flags = (state.enabled ? 1 : 0)
+			| (state.loaded ? 2 : 0)
+			| (m.builtin ? 4 : 0)
+			| (m.settings.isEmpty() ? 0 : 8);
+		result.append({
+			m.id,
+			m.name,
+			m.version,
+			m.author,
+			m.description,
+			m.type,
+			m.dir,
+			QString::number(flags),
+			state.error,
+		});
+	}
+	return result.join(QChar(0));
+}
+
 void PaintStatus(QPainter &p, QRect rect, const style::color &color) {
 	auto hq = PainterHighQualityEnabler(p);
 	p.setPen(QPen(st::windowBg, st::lineWidth * 2));
@@ -288,16 +314,21 @@ void DamzaPlugins::rebuild() {
 		return;
 	}
 	_summary = Summary();
+	auto shown = ListSignature(_query);
+	if (shown == _shown) {
+		return;
+	}
+	_shown = std::move(shown);
 	_list->clear();
 	const auto &plugins = Manager::Get().plugins();
-	auto shown = 0;
+	auto matched = 0;
 	for (const auto &state : plugins) {
 		if (Matches(state, _query)) {
 			addCard(_list, state);
-			++shown;
+			++matched;
 		}
 	}
-	if (!shown) {
+	if (!matched) {
 		Ui::AddSkip(_list);
 		Ui::AddDividerText(
 			_list,

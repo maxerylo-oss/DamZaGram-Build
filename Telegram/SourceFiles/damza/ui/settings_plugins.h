@@ -50,6 +50,7 @@ private:
 	Ui::VerticalLayout *_list = nullptr;
 	rpl::variable<QString> _summary;
 	QString _query;
+	QString _shown;
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	bool _rebuildScheduled = false;
 

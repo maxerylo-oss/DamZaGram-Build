@@ -2,9 +2,7 @@
 // a fork of AyuGram for Desktop.
 #pragma once
 
-namespace Damza::Plugins {
-class Bridge;
-} // namespace Damza::Plugins
+#include "damza/plugins/plugin_bridge.h"
 
 // Module-wide state of the `ui` API extensions: what plugins registered
 // (buttons, menu items, shortcuts, panels, render transforms) and the
@@ -12,9 +10,12 @@ class Bridge;
 namespace Damza::Plugins::UiExt {
 
 // A JS function kept by the plugin's `ui` module under a numeric id.
+// Ids restart with every load, so `bridge` pins the instance they belong
+// to: after a reload the old ids must not reach the new instance.
 struct Callback {
 	QString pluginId;
 	int id = 0;
+	QPointer<Bridge> bridge;
 
 	explicit operator bool() const {
 		return (id != 0) && !pluginId.isEmpty();
@@ -50,7 +51,7 @@ bool Remove(const QString &pluginId, int id);
 // Re-evaluates `when` of top bar buttons.
 void RefreshButtons();
 
-void Notify(const QString &pluginId, const QVariantMap &spec);
+void Notify(not_null<Bridge*> bridge, const QVariantMap &spec);
 void OpenLink(const QString &url);
 
 [[nodiscard]] QVariant ComposeGet();

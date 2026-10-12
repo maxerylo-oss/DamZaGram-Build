@@ -62,3 +62,47 @@ sandbox.event('message.new', mock.message({ chat: stranger, peerId: stranger.id,
 eq(mock.sent.length, 2, 'not a contact');
 mock.command('/away off');
 assert(!isAway());
+
+// The client adds a sent message to the history synchronously: message.new
+// for the auto-reply arrives before dzg.messages.send() returns. It must
+// not count as the user writing (that turned the auto-reply off).
+const realSend = dzg.messages.send;
+dzg.messages.send = (p, text, options) => {
+  const result = realSend(p, text, options);
+  const chat = mock.peer(String((p && p.id) || p), 'Кто-то', 'user');
+  sandbox.event('message.new', mock.message({ chat, peerId: chat.id, out: true, text }));
+  return result;
+};
+sandbox.settings.onlyContacts = false;
+mock.command('/away on');
+const friend = mock.peer(800, 'Коля', 'user');
+sandbox.event('message.new', mock.message({ chat: friend, peerId: friend.id, fromName: 'Коля', text: 'ты где?' }));
+eq(mock.sent.length, 3, 'replied');
+assert(isAway(), 'the synchronous echo of the reply did not turn auto-reply off');
+
+// Cooldown never drops below a minute: two auto-repliers can't ping-pong.
+sandbox.settings.cooldownMinutes = 0;
+sandbox.event('message.new', mock.message({ chat: friend, peerId: friend.id, fromName: 'Коля', text: 'автоответ Коли' }));
+eq(mock.sent.length, 3, 'zero cooldown is clamped');
+sandbox.settings.cooldownMinutes = 60;
+
+// Telegram service notifications (login codes) get no reply.
+const telegram = mock.peer(777000, 'Telegram', 'user');
+sandbox.event('message.new', mock.message({ chat: telegram, peerId: telegram.id, fromName: 'Telegram', text: 'Код входа: 12345' }));
+eq(mock.sent.length, 3, 'no reply to 777000');
+
+// Several accounts: reply only to messages of the active one (send() uses it).
+const realAccounts = dzg.accounts;
+dzg.accounts = { list: () => [{ index: 0, active: true }, { index: 1, active: false }] };
+const stranger2 = mock.peer(900, 'Оля', 'user');
+sandbox.event('message.new', mock.message({ chat: stranger2, peerId: stranger2.id, fromName: 'Оля', text: 'привет' }));
+eq(mock.sent.length, 3, 'message of another account');
+const lastDate = Math.floor(Date.now() / 1000);
+const realGet = dzg.messages.get;
+dzg.messages.get = (p, id) => (String(p) === '900' ? mock.message({ id, chat: stranger2, peerId: '900', text: 'привет 2', date: lastDate }) : null);
+sandbox.event('message.new', mock.message({ id: 4242, chat: stranger2, peerId: stranger2.id, fromName: 'Оля', text: 'привет 2', date: lastDate }));
+eq(mock.sent.length, 4, 'message of the active account');
+dzg.messages.get = realGet;
+dzg.accounts = realAccounts;
+dzg.messages.send = realSend;
+mock.command('/away off');

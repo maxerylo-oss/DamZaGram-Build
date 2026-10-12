@@ -58,6 +58,7 @@ private:
 	bool _hasSendHook = false;
 	bool _unloading = false;
 	bool _loaded = false;
+	bool _closed = false;
 
 };
 

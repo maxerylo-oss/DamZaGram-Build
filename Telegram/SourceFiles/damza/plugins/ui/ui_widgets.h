@@ -110,6 +110,7 @@ private:
 class SidePanelHost final : public Ui::RpWidget {
 public:
 	explicit SidePanelHost(QWidget *parent);
+	~SidePanelHost();
 
 	void add(not_null<SidePanel*> panel);
 	void activate(not_null<SidePanel*> panel);

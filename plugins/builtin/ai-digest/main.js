@@ -124,6 +124,14 @@ function describeError(status, data) {
   }
 }
 
+// Ключ не должен попасть в панель или лог, даже если прокси вернёт его
+// в тексте ошибки.
+export function redact(text) {
+  const key = String(setting('apiKey', '')).trim();
+  const value = String(text);
+  return key.length >= 8 ? value.split(key).join('sk-ant-…') : value;
+}
+
 export async function callClaude(request) {
   const apiKey = String(setting('apiKey', '')).trim();
   const endpoint = String(setting('endpoint', DEFAULT_ENDPOINT)).trim() || DEFAULT_ENDPOINT;
@@ -311,7 +319,7 @@ export async function digest(chat, count) {
     if (!panel) return;
     panel.clear();
     panel.addLabel('Не получилось сделать дайджест', { bold: true });
-    panel.addLabel(String(e && e.message ? e.message : e), { muted: true });
+    panel.addLabel(redact(e && e.message ? e.message : e), { muted: true });
     panel.addButton('Повторить', () => digest(chat, wanted));
     panel.addButton('Открыть настройки ключа', () => showKeyRequest(chat, wanted), { style: 'light' });
   } finally {

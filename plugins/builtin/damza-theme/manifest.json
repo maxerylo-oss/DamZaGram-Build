@@ -1,7 +1,7 @@
 {
   "id": "damza-theme",
   "name": "Тема DamZaGram",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "@wetakush",
   "builtin": true,
   "description": "Фирменные акценты DamZaGram поверх любой темы: Monolith (лайм на тёмном), Glass (тёплый коралл), Rail (оранжевый). Отдельные оттенки для ночного и дневного режима, /theme и выбор в главном меню.",

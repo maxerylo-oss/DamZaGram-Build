@@ -73,3 +73,16 @@ eq(sandbox.settings.words, '/wetakush/');
 mock.submit(mock.lastPanel(), 'дедлайн');
 eq(sandbox.settings.words, '/wetakush/\nдедлайн');
 assert(!addWord('Дедлайн'), 'no duplicates');
+
+// Messages without a keyword (almost all of them) don't touch the storage
+// or the chat list: this runs for every message in every chat.
+sandbox.reset();
+const realEntry = dzg.chats.entry;
+let entries = 0;
+dzg.chats.entry = (p) => { entries++; return realEntry(p); };
+for (let i = 0; i < 50; ++i) {
+  sandbox.event('message.new', mock.message({ chat: group, peerId: group.id, text: 'обычное сообщение ' + i }));
+}
+eq(sandbox.called('storageGet').filter((c) => c.args[0] === 'excluded').length, 0, 'no storage reads');
+eq(entries, 0, 'no chat lookups');
+dzg.chats.entry = realEntry;

@@ -9,23 +9,39 @@
 namespace Damza::Tl {
 namespace {
 
+// api.tl nests Vector<> two levels deep at most. Type texts also come from
+// plugins (dzg.api.encode / decode), unbounded nesting would overflow the
+// stack here and in the codec.
+constexpr auto kMaxTypeNesting = 16;
+
 [[nodiscard]] bool IsBareName(const QString &name) {
 	const auto dot = name.lastIndexOf(QLatin1Char('.'));
 	const auto first = name.mid(dot + 1, 1);
 	return !first.isEmpty() && first[0].isLower();
 }
 
+[[nodiscard]] TypeRef ParseType(
+	const QString &text,
+	const QString &generic,
+	int depth);
+
 [[nodiscard]] std::shared_ptr<const TypeRef> Inner(
 		const QString &text,
-		const QString &generic) {
-	return std::make_shared<const TypeRef>(ParseType(text, generic));
+		const QString &generic,
+		int depth) {
+	return std::make_shared<const TypeRef>(
+		ParseType(text, generic, depth + 1));
 }
 
-} // namespace
-
-TypeRef ParseType(const QString &text, const QString &generic) {
-	const auto type = text.trimmed();
+TypeRef ParseType(const QString &text, const QString &generic, int depth) {
 	auto result = TypeRef();
+	if (depth > kMaxTypeNesting) {
+		// No such constructor, so encoding and decoding fail cleanly.
+		result.kind = TypeKind::Bare;
+		result.name = QStringLiteral("(too deeply nested type)");
+		return result;
+	}
+	const auto type = text.trimmed();
 	const auto simple = [&](TypeKind kind) {
 		result.kind = kind;
 		result.name = type;
@@ -66,7 +82,7 @@ TypeRef ParseType(const QString &text, const QString &generic) {
 			? TypeKind::Vector
 			: TypeKind::BareVector;
 		result.name = type.left(6);
-		result.inner = Inner(type.mid(7, type.size() - 8), generic);
+		result.inner = Inner(type.mid(7, type.size() - 8), generic, depth);
 		return result;
 	} else if (type.startsWith(QLatin1Char('%'))) {
 		return simple(TypeKind::Bare);
@@ -74,6 +90,12 @@ TypeRef ParseType(const QString &text, const QString &generic) {
 		return simple(TypeKind::Bare);
 	}
 	return simple(TypeKind::Boxed);
+}
+
+} // namespace
+
+TypeRef ParseType(const QString &text, const QString &generic) {
+	return ParseType(text, generic, 0);
 }
 
 QString TypeRef::text() const {

@@ -385,6 +385,129 @@ void TestUpdatesAndGzip(const Schema &schema) {
 	CHECK_EQ(Decode(schema, error).json, QByteArray(R"({"_":"rpc_error","error_code":400,"error_message":"PEER_ID_INVALID"})"));
 }
 
+void TestHostileInput(const Schema &schema) {
+	// Type texts come from plugins: deep nesting must not recurse unbounded.
+	auto deepType = QString();
+	for (auto i = 0; i != 100000; ++i) {
+		deepType += QStringLiteral("Vector<");
+	}
+	deepType += QStringLiteral("int");
+	for (auto i = 0; i != 100000; ++i) {
+		deepType += QLatin1Char('>');
+	}
+	const auto deep = ParseType(deepType);
+	CHECK(deep.kind == TypeKind::Vector);
+	CHECK(Decode(schema, Primes({ 0x1cb5c415, 0 }), deep).ok());
+	CHECK(EncodeValue(schema, QJsonArray{ QJsonArray{} }, deep).ok());
+	auto nested = Primes({});
+	for (auto i = 0; i != 20; ++i) {
+		nested += Primes({ 0x1cb5c415, 1 });
+	}
+	CHECK(!Decode(schema, nested, deep).ok());
+	CHECK_EQ(ParseType(QStringLiteral("Vector<Vector<long>>")).text(), QStringLiteral("Vector<Vector<long>>"));
+
+	// Deep but valid data is refused cleanly instead of overflowing the stack.
+	const auto jsonArray = quint32(0xf7444763);
+	auto deepData = Primes({});
+	for (auto i = 0; i != 5000; ++i) {
+		deepData += Primes({ jsonArray, 0x1cb5c415, 1 });
+	}
+	deepData += Primes({ 0x3f6d7b68 }); // jsonNull
+	const auto tooDeep = Decode(schema, deepData, ParseType(QStringLiteral("JSONValue")));
+	CHECK(tooDeep.error.startsWith(QStringLiteral("too deep")));
+	auto fineData = Primes({});
+	for (auto i = 0; i != 30; ++i) {
+		fineData += Primes({ jsonArray, 0x1cb5c415, 1 });
+	}
+	fineData += Primes({ 0x3f6d7b68 });
+	const auto fine = Decode(schema, fineData, ParseType(QStringLiteral("JSONValue")));
+	CHECK_EQ(fine.error, QString());
+	auto deepJson = QJsonValue(QJsonObject{ { "_", "jsonNull" } });
+	for (auto i = 0; i != 300; ++i) {
+		deepJson = QJsonObject{ { "_", "jsonArray" }, { "value", QJsonArray{ deepJson } } };
+	}
+	const auto tooDeepEncode = EncodeValue(schema, deepJson, ParseType(QStringLiteral("JSONValue")));
+	CHECK(tooDeepEncode.error.contains(QStringLiteral("too deep")));
+	const auto back = ParseJson(fine.json);
+	CHECK_EQ(EncodeValue(schema, back, ParseType(QStringLiteral("JSONValue"))).data, fineData);
+
+	// gzip_packed that unpacks to gzip_packed again (a "quine") must stop.
+	auto options = DecodeOptions();
+	auto unpacks = 0;
+	auto self = Buffer();
+	options.ungzip = [&](const QByteArray &) {
+		++unpacks;
+		return QByteArray(
+			reinterpret_cast<const char*>(self.constData()),
+			self.size() * 4);
+	};
+	self = Primes({ kGzipPackedId, 0x00000000 });
+	const auto quine = Decode(schema, self, ParseType(QStringLiteral("Updates")), options);
+	CHECK(!quine.ok());
+	CHECK(quine.error.contains(QStringLiteral("nested too deep")));
+	CHECK(unpacks <= 3);
+
+	// A vector of gzip_packed bombs is limited in total.
+	unpacks = 0;
+	options.ungzip = [&](const QByteArray &) {
+		++unpacks;
+		auto result = QByteArray(16 * 1024 * 1024, '\0');
+		const auto empty = Primes({ 0x1cb5c415, 0 });
+		std::memcpy(result.data(), empty.constData(), 8);
+		return result;
+	};
+	auto bombs = Primes({ 0x1cb5c415, 100 });
+	for (auto i = 0; i != 100; ++i) {
+		bombs += Primes({ kGzipPackedId, 0x00000000 });
+	}
+	const auto bombed = Decode(schema, bombs, ParseType(QStringLiteral("Vector<Vector<int>>")), options);
+	CHECK(bombed.error.contains(QStringLiteral("too large")));
+	CHECK_EQ(unpacks, 5);
+
+	// bytes longer than the 24-bit TL length can't be encoded.
+	const auto huge = QString(0x1000000, QLatin1Char('a'));
+	CHECK(EncodeValue(schema, huge, ParseType(QStringLiteral("string"))).error.contains(QStringLiteral("too long")));
+	CHECK(EncodeValue(schema, QString(0xFFFFFF, QLatin1Char('a')), ParseType(QStringLiteral("string"))).ok());
+
+	// Explicit out of range flags are ignored instead of being converted.
+	const auto flags = EncodeValue(schema, Json(R"({"_": "inputReplyToMessage", "flags": 1e300, "reply_to_msg_id": 1})"), ParseType(QStringLiteral("InputReplyTo")));
+	CHECK_EQ(flags.error, QString());
+	CHECK_EQ(quint32(flags.data.value(1)), 0u);
+}
+
+void TestCheck(const Schema &schema) {
+	auto seen = QStringList();
+	auto options = EncodeOptions();
+	options.check = [&](const Combinator &method, const QJsonObject &params) {
+		seen.push_back(method.name);
+		if (method.name == QStringLiteral("auth.signIn")) {
+			return QStringLiteral("refused");
+		} else if (method.name == QStringLiteral("invokeWithLayer")
+			&& params.value(QStringLiteral("layer")).toInt() != 229) {
+			return QStringLiteral("bad layer");
+		}
+		return QString();
+	};
+	const auto wrapped = EncodeMethod(schema, QStringLiteral("invokeWithLayer"), Json(R"({
+		"layer": 229, "query": { "_": "invokeWithoutUpdates", "query": { "_": "auth.signIn", "phone_number": "1", "phone_code_hash": "x" } }
+	})"), options);
+	CHECK_EQ(wrapped.error, QStringLiteral("query.query: refused"));
+	CHECK_EQ(seen.join(','), QStringLiteral("invokeWithLayer,invokeWithoutUpdates,auth.signIn"));
+
+	const auto layer = EncodeMethod(schema, QStringLiteral("invokeWithLayer"), Json(R"({
+		"layer": 1, "query": { "_": "help.getConfig" }
+	})"), options);
+	CHECK_EQ(layer.error, QStringLiteral("bad layer"));
+
+	seen.clear();
+	const auto allowed = EncodeMethod(schema, QStringLiteral("invokeWithoutUpdates"), Json(R"({
+		"query": { "_": "upload.getFile", "location": { "_": "inputPeerPhotoFileLocation", "peer": { "_": "inputPeerSelf" }, "photo_id": "1" }, "offset": "0", "limit": 1024 }
+	})"), options);
+	CHECK_EQ(allowed.error, QString());
+	CHECK_EQ(seen.join(','), QStringLiteral("invokeWithoutUpdates,upload.getFile"));
+	CHECK_EQ(allowed.result.text(), QStringLiteral("upload.File"));
+}
+
 QJsonValue Sample(const Schema &schema, const TypeRef &type, int depth);
 
 QJsonObject SampleObject(const Schema &schema, const Combinator &combinator, int depth) {
@@ -492,6 +615,8 @@ int main() {
 	TestScalars(schema);
 	TestDefaultsAndGenerics(schema);
 	TestUpdatesAndGzip(schema);
+	TestHostileInput(schema);
+	TestCheck(schema);
 	TestWholeSchema(schema);
 	std::printf("%d checks, %d failures\n", Checks, Failures);
 	return Failures ? 1 : 0;

@@ -12,8 +12,26 @@ namespace Damza::Plugins::Js {
 namespace {
 
 constexpr auto kMemoryLimit = size_t(256) * 1024 * 1024;
+#ifdef Q_OS_WIN
+constexpr auto kStackLimit = size_t(512) * 1024; // the main thread has 1 MB
+#else // Q_OS_WIN
 constexpr auto kStackLimit = size_t(1024) * 1024;
+#endif // Q_OS_WIN
 constexpr auto kMaxDepth = 32;
+constexpr auto kMaxValues = 4 * 1024 * 1024;
+constexpr auto kMaxReserve = 64 * 1024;
+
+struct ToVariantState {
+	std::vector<void*> path;
+	int left = kMaxValues;
+	bool failed = false;
+};
+
+// Entries into all runtimes. A plugin entered from another plugin's native
+// call (an event, a send hook, plugins.eval) shares the stack budget that
+// started at the outermost entry, so a chain of plugins can't overflow it.
+auto AllEntries = 0;
+auto StackBase = std::uintptr_t();
 
 [[nodiscard]] Runtime *FromContext(JSContext *ctx) {
 	return static_cast<Runtime*>(JS_GetContextOpaque(ctx));
@@ -36,8 +54,16 @@ constexpr auto kMaxDepth = 32;
 	return JS_NewStringLen(ctx, utf8.constData(), size_t(utf8.size()));
 }
 
-[[nodiscard]] QVariant ToVariant(JSContext *ctx, JSValueConst value, int depth) {
-	if (depth > kMaxDepth) {
+[[nodiscard]] QVariant ToVariant(
+		JSContext *ctx,
+		JSValueConst value,
+		ToVariantState &state) {
+	if (state.failed || --state.left < 0) {
+		return QVariant();
+	} else if (JS_IsException(value)) {
+		state.failed = true;
+		return QVariant();
+	} else if (int(state.path.size()) > kMaxDepth) {
 		return QVariant();
 	} else if (JS_IsUndefined(value) || JS_IsNull(value)) {
 		return QVariant();
@@ -53,18 +79,32 @@ constexpr auto kMaxDepth = 32;
 		return QVariant(ToQString(ctx, value));
 	} else if (JS_IsFunction(ctx, value) || !JS_IsObject(value)) {
 		return QVariant();
-	} else if (JS_IsArray(value)) {
+	}
+	const auto object = JS_VALUE_GET_PTR(value);
+	if (ranges::find(state.path, object) != end(state.path)) {
+		return QVariant(); // a cycle
+	}
+	state.path.push_back(object);
+	const auto guard = gsl::finally([&] { state.path.pop_back(); });
+	if (JS_IsArray(value)) {
 		auto length = int64_t();
 		if (JS_GetLength(ctx, value, &length) < 0) {
-			JS_FreeValue(ctx, JS_GetException(ctx));
-			return QVariantList();
+			state.failed = true;
+			return QVariant();
 		}
 		auto result = QVariantList();
-		result.reserve(int(length));
-		for (auto i = int64_t(); i != length; ++i) {
-			const auto item = JS_GetPropertyUint32(ctx, value, uint32_t(i));
-			result.push_back(ToVariant(ctx, item, depth + 1));
+		result.reserve(int(std::clamp(
+			length,
+			int64_t(0),
+			int64_t(std::min(state.left, kMaxReserve)))));
+		auto i = int64_t();
+		for (; i < length && state.left > 0 && !state.failed; ++i) {
+			const auto item = JS_GetPropertyInt64(ctx, value, i);
+			result.push_back(ToVariant(ctx, item, state));
 			JS_FreeValue(ctx, item);
+		}
+		if (i < length) {
+			state.left = std::min(state.left, -1);
 		}
 		return result;
 	}
@@ -72,25 +112,50 @@ constexpr auto kMaxDepth = 32;
 	auto count = uint32_t();
 	const auto flags = JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY;
 	if (JS_GetOwnPropertyNames(ctx, &properties, &count, value, flags) < 0) {
-		JS_FreeValue(ctx, JS_GetException(ctx));
-		return QVariantMap();
+		state.failed = true;
+		return QVariant();
 	}
 	auto result = QVariantMap();
-	for (auto i = uint32_t(); i != count; ++i) {
+	auto i = uint32_t();
+	for (; i != count && state.left > 0 && !state.failed; ++i) {
 		const auto key = JS_AtomToCString(ctx, properties[i].atom);
 		const auto item = JS_GetProperty(ctx, value, properties[i].atom);
-		if (key && !JS_IsFunction(ctx, item) && !JS_IsUndefined(item)) {
+		if (JS_IsException(item)) {
+			state.failed = true;
+		} else if (key && !JS_IsFunction(ctx, item) && !JS_IsUndefined(item)) {
 			result.insert(
 				QString::fromUtf8(key),
-				ToVariant(ctx, item, depth + 1));
+				ToVariant(ctx, item, state));
 		}
 		JS_FreeValue(ctx, item);
 		if (key) {
 			JS_FreeCString(ctx, key);
 		}
 	}
+	if (i != count) {
+		state.left = std::min(state.left, -1);
+	}
 	JS_FreePropertyEnum(ctx, properties, count);
 	return result;
+}
+
+// Throws in JS (and returns false) if the value can't cross the boundary.
+[[nodiscard]] bool ToVariantChecked(
+		JSContext *ctx,
+		JSValueConst value,
+		QVariant *result) {
+	auto state = ToVariantState();
+	*result = ToVariant(ctx, value, state);
+	if (state.failed) {
+		if (!JS_HasException(ctx)) {
+			JS_ThrowInternalError(ctx, "could not read a value");
+		}
+		return false;
+	} else if (state.left < 0) {
+		JS_ThrowRangeError(ctx, "value is too large for native code");
+		return false;
+	}
+	return true;
 }
 
 [[nodiscard]] JSValue FromVariant(
@@ -166,7 +231,9 @@ JSValue CallNative(
 	auto args = QVariantList();
 	args.reserve(argc);
 	for (auto i = 0; i != argc; ++i) {
-		args.push_back(ToVariant(ctx, argv[i], 0));
+		if (!ToVariantChecked(ctx, argv[i], &args.emplace_back())) {
+			return JS_EXCEPTION;
+		}
 	}
 	const auto &method = *static_cast<Native*>(opaque);
 	return FromVariant(ctx, method(args), 0);
@@ -254,15 +321,31 @@ class Runtime::Entry final {
 public:
 	explicit Entry(not_null<Runtime*> runtime) : _runtime(runtime) {
 		if (!_runtime->_depth++) {
+			// Count the stack limit from the outermost entry into any
+			// runtime, not from the runtime creation.
+			auto marker = char();
+			const auto here = reinterpret_cast<std::uintptr_t>(&marker);
+			if (!AllEntries) {
+				StackBase = here;
+			}
+			const auto used = (StackBase > here)
+				? size_t(StackBase - here)
+				: size_t();
+			JS_SetMaxStackSize(
+				_runtime->_runtime,
+				(used < kStackLimit) ? (kStackLimit - used) : size_t(1));
+			JS_UpdateStackTop(_runtime->_runtime);
 			_runtime->_deadline = crl::now() + _runtime->_timeLimit;
 			_runtime->_interrupted = false;
 		}
+		++AllEntries;
 	}
 	~Entry() {
 		if (_runtime->_depth == 1) {
 			_runtime->runJobs();
 		}
 		--_runtime->_depth;
+		--AllEntries;
 	}
 
 private:
@@ -460,8 +543,13 @@ QVariant Runtime::callBound(const QVariantList &args, QString *error) {
 		*error = exceptionText();
 		return QVariant();
 	}
-	auto converted = ToVariant(_context, result, 0);
+	auto converted = QVariant();
+	const auto ok = ToVariantChecked(_context, result, &converted);
 	JS_FreeValue(_context, result);
+	if (!ok) {
+		*error = exceptionText();
+		return QVariant();
+	}
 	return converted;
 }
 

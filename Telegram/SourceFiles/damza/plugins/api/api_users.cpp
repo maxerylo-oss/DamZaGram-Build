@@ -110,13 +110,16 @@ void Block(
 		bool blocked,
 		Pending pending) {
 	if (!blocked) {
+		// Forced: without it unblock() returns early, never calling back,
+		// when the client thinks the peer is not blocked (that flag is often
+		// unknown until the full info is loaded).
 		session->api().blockedPeers().unblock(peer, [=](bool success) {
 			if (success) {
 				pending.resolve(QVariant());
 			} else {
 				pending.reject(u"Could not unblock"_q);
 			}
-		});
+		}, true);
 		return;
 	} else if (peer->isBlocked()) {
 		pending.resolve(QVariant());
@@ -419,7 +422,12 @@ DZG_API_MODULE({
 			return QVariant(ListAccounts());
 		} });
 		out.push_back({ "accounts_switchTo", [](const Args &args) {
-			return QVariant(SwitchAccount(int(args.value(0).toDouble())));
+			// NaN or out of range: converting it to int is undefined
+			// (0 on ARM, which would switch to the first account).
+			const auto index = args.value(0).toDouble();
+			return QVariant(index >= 0.
+				&& index <= double(std::numeric_limits<int>::max())
+				&& SwitchAccount(int(index)));
 		} });
 	},
 	.prelude = [] {
@@ -478,7 +486,12 @@ DZG_API_MODULE({
 		},
 		switchTo(index) {
 			const target = (index && typeof index === 'object') ? index.index : index;
-			return !!native.accounts_switchTo(Number(target));
+			// Number(null) and Number('') are 0: never switch to the first
+			// account because of a missing entry (list().find(...) || null).
+			const valid = (typeof target === 'number')
+				|| (typeof target === 'string' && target.trim() !== '');
+			const n = valid ? Number(target) : NaN;
+			return Number.isInteger(n) ? !!native.accounts_switchTo(n) : false;
 		},
 	});
 )DZG_JS");

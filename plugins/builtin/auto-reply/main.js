@@ -7,6 +7,10 @@ const STATE_KEY = 'state';
 const REPLIED_KEY = 'replied';
 const MAX_AGE_SECONDS = 120;
 const ECHO_MS = 30 * 1000;
+// Меньше минуты нельзя: два автоответчика иначе отвечали бы друг другу без конца.
+const MIN_COOLDOWN_MINUTES = 1;
+// Служебные аккаунты Telegram: уведомления и коды входа, «Ответы».
+const SERVICE_USERS = new Set([777000, 42777, 489000, 1271266957]);
 
 const setting = (key, fallback) => {
   const value = dzg.settings.get(key);
@@ -104,6 +108,20 @@ function isEcho(message) {
   return sentRecently.some((s) => s.peerId === peerId && s.text.trim() === String(message.text || '').trim());
 }
 
+// message.new приходит от всех аккаунтов клиента, а dzg.messages.send
+// отправляет от активного: отвечаем, только если сообщение пришло в него.
+function inActiveAccount(m) {
+  let accounts = [];
+  try {
+    accounts = (dzg.accounts && dzg.accounts.list && dzg.accounts.list()) || [];
+  } catch (e) {
+    accounts = [];
+  }
+  if (accounts.length <= 1) return true;
+  const own = dzg.messages.get(m.peerId || m.chat.id, m.id);
+  return !!own && own.date === m.date && String(own.text || '') === String(m.text || '');
+}
+
 function onMessage(m) {
   if (!m || m.service || !m.chat) return;
   if (m.out) {
@@ -111,19 +129,29 @@ function onMessage(m) {
     if (state().on && setting('autoOff', true)) turnOff('Ты снова пишешь — автоответчик выключен');
     return;
   }
-  if (m.chat.type !== 'user' || m.chat.isSelf) return;
+  if (m.chat.type !== 'user' || m.chat.isSelf || SERVICE_USERS.has(Number(m.chat.tgId))) return;
   if (m.date && Date.now() / 1000 - m.date > MAX_AGE_SECONDS) return;
   if (!isAway()) return;
   const peerId = String(m.peerId || m.chat.id);
   if (setting('onlyContacts', false) && !isContact(peerId)) return;
+  if (!inActiveAccount(m)) return;
 
-  const cooldown = Math.max(0, Number(setting('cooldownMinutes', 60)) || 0) * 60 * 1000;
+  const minutes = Math.max(MIN_COOLDOWN_MINUTES, Number(setting('cooldownMinutes', 60)) || 0);
+  const cooldown = minutes * 60 * 1000;
   const replied = dzg.storage.get(REPLIED_KEY, {}) || {};
   if (replied[peerId] && Date.now() - replied[peerId] < cooldown) return;
 
   const text = replyText(m);
-  if (!dzg.messages.send(peerId, text, { replyTo: m.id })) return;
-  sentRecently.push({ peerId, text, at: Date.now() });
+  // send() сразу добавляет ответ в историю, и message.new о нём приходит
+  // ещё до возврата: запоминаем ответ заранее, иначе он сочтётся тем,
+  // что пользователь сам написал, и выключит автоответчик.
+  const echo = { peerId, text, at: Date.now() };
+  sentRecently.push(echo);
+  if (!dzg.messages.send(peerId, text, { replyTo: m.id })) {
+    const index = sentRecently.indexOf(echo);
+    if (index >= 0) sentRecently.splice(index, 1);
+    return;
+  }
   replied[peerId] = Date.now();
   // Не копим старые записи.
   for (const key of Object.keys(replied)) {

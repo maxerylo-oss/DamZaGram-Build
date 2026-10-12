@@ -65,6 +65,12 @@ const rejects = async (promise, text) => {
     { type: 'customEmoji', offset: 6, length: 1, documentId: '99' },
   ]);
 }
+{
+  // An unclosed ``` and a backslash at the end of a line are plain text:
+  // the quote after them is still a quote.
+  eq(dzg.messages.parse('a ``` b\n> q'), { text: 'a ``` b\nq', entities: [{ type: 'blockquote', offset: 8, length: 1 }] });
+  eq(dzg.messages.parse('C:\\dir\\\n> q'), { text: 'C:\\dir\\\nq', entities: [{ type: 'blockquote', offset: 8, length: 1 }] });
+}
 eq(dzg.messages.parse('plain **x**', 'none'), { text: 'plain **x**', entities: [] });
 let threw = false;
 try { dzg.messages.parse('x', 'bbcode'); } catch (e) { threw = e instanceof TypeError; }
@@ -85,6 +91,13 @@ assert(threw, 'unknown parse mode throws');
   eq(r.entities[3].language, 'js');
   assert(r.entities[9].collapsed === true, 'expandable blockquote');
   eq(r.entities[11].userId, '7');
+  // A long unclosed tag is plain text and doesn't backtrack exponentially
+  // (it took seconds at 25 attributes); unquoted values still work.
+  const start = Date.now();
+  const open = '<a' + ' b="x"'.repeat(40);
+  eq(dzg.messages.parse(open, 'html').text, open);
+  assert(Date.now() - start < 500, 'unclosed tag parsed fast');
+  eq(dzg.messages.parse('<a href=https://x.y/?a=1>l</a>', 'html').entities, [{ type: 'textLink', offset: 0, length: 1, url: 'https://x.y/?a=1' }]);
 }
 
 // --- format: round trips
@@ -111,6 +124,19 @@ assert(threw, 'unknown parse mode throws');
     { type: 'italic', offset: 2, length: 4 },
   ]), '<b>ab<i>cd</i></b><i>ef</i>');
   eq(dzg.messages.format('x', 'md', []), 'x');
+  // Markdown round trips where a marker meets the text: '**' + '>' at a
+  // line start is not a quote, '*' next to '**' doesn't pair with it.
+  const roundTrip = (text, entities) => {
+    const md = dzg.messages.format(text, 'markdown', entities);
+    eq(dzg.messages.parse(md), { text, entities }, md);
+  };
+  roundTrip('x\n>b', [{ type: 'bold', offset: 2, length: 2 }]);
+  roundTrip('x\n>b', [{ type: 'bold', offset: 0, length: 2 }]);
+  roundTrip('5*x', [{ type: 'bold', offset: 2, length: 1 }]);
+  roundTrip('x*', [{ type: 'bold', offset: 0, length: 2 }]);
+  roundTrip('a|b', [{ type: 'spoiler', offset: 0, length: 1 }]);
+  roundTrip('_a_', [{ type: 'italic', offset: 1, length: 1 }]);
+  eq(dzg.messages.format('rating 5* ok', 'md', []), 'rating 5* ok');
 }
 
 // --- send: parse modes and options
@@ -199,6 +225,20 @@ assert(sandbox.last('messages_sendFile').args[2].album === false, 'album off');
   eq(all.length, 150);
   eq([all[0].id, all[149].id], [1, 150]);
 
+  // history: offsetDate limits the first page only, the next ones go by
+  // offsetId; a page the server sends again is not added twice.
+  const p4 = dzg.messages.history(chat, { limit: 150, offsetDate: 1000 });
+  eq(sandbox.last('messages_history').args[1].offsetDate, 1000);
+  await flush();
+  const newest = [];
+  for (let i = 51; i <= 150; ++i) newest.push(msg(i));
+  sandbox.settle(nextId, true, { messages: newest, count: 1000, nextOffsetId: 51, nextOffsetPeerId: '-1001' });
+  await flush();
+  const next = sandbox.last('messages_history').args[1];
+  eq([next.offsetId, next.offsetDate], [51, 0]);
+  sandbox.settle(nextId, true, { messages: newest, count: 1000, nextOffsetId: 51, nextOffsetPeerId: '-1001' });
+  eq((await p4).length, 100);
+
   // history: rejects with the server error.
   const p3 = dzg.messages.history('-1001');
   await flush();
@@ -240,6 +280,19 @@ assert(sandbox.last('messages_sendFile').args[2].album === false, 'album off');
   sandbox.settle(nextId, true, { messages: [msg(8)], count: 10, nextOffsetId: 8 });
   await consume;
   eq(seen, [10, 9, 8]);
+
+  // iterate: a page the server sends again ends it without repeats.
+  const again = [];
+  const consumeAgain = (async () => {
+    for await (const m of dzg.messages.iterate(chat, { batch: 2 })) again.push(m.id);
+  })();
+  await flush();
+  sandbox.settle(nextId, true, { messages: [msg(9), msg(10)], count: 10, nextOffsetId: 9 });
+  await flush();
+  eq(sandbox.last('messages_history').args[1].offsetId, 9);
+  sandbox.settle(nextId, true, { messages: [msg(9), msg(10)], count: 10, nextOffsetId: 9 });
+  await consumeAgain;
+  eq(again, [10, 9]);
 
   // fetch: single id -> message or null, array -> list.
   const f1 = dzg.messages.fetch(chat, 5);

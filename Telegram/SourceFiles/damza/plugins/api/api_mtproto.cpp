@@ -19,6 +19,7 @@
 #include "mtproto/details/mtproto_serialized_request.h"
 #include "mtproto/facade.h"
 #include "mtproto/mtp_instance.h"
+#include "mtproto/mtproto_dc_options.h"
 #include "mtproto/mtproto_response.h"
 
 #include <QtCore/QJsonDocument>
@@ -40,6 +41,8 @@ static_assert(
 
 constexpr auto kDefaultFloodSleep = 10;
 constexpr auto kMaxUnpackedSize = 64 * 1024 * 1024;
+// One dispatch runs under one watchdog deadline, keep the batches small.
+constexpr auto kMaxUpdatesPerDispatch = 100;
 
 struct PendingCall {
 	QPointer<Bridge> bridge;
@@ -248,9 +251,46 @@ enum class InputKind {
 	return list.contains(method);
 }
 
+// Called for the method and for every method wrapped in it with !X
+// (invokeWithLayer, invokeWithoutUpdates...): a wrapper must not let
+// a refused method through.
+[[nodiscard]] QString RefuseReason(
+		const Tl::Combinator &method,
+		const QJsonObject &params) {
+	if (IsRefusedMethod(method.name)) {
+		return u"%1 is not available to plugins"_q.arg(method.name);
+	} else if (method.name == u"initConnection"_q) {
+		// The client initializes its connections itself.
+		return u"%1 is not available to plugins"_q.arg(method.name);
+	} else if (method.name == u"invokeWithLayer"_q) {
+		// Another layer would stay on the session, and the client could
+		// not parse the updates and responses that the server sends in it.
+		const auto layer = params.value(u"layer"_q).toVariant().toLongLong();
+		if (layer != MTP::details::kCurrentLayer) {
+			return u"invokeWithLayer: only layer %1 is supported"_q.arg(
+				MTP::details::kCurrentLayer);
+		}
+	}
+	return QString();
+}
+
 [[nodiscard]] bool IsFileMethod(const QString &method) {
 	return method.startsWith(u"upload.get"_q)
 		|| (method == u"upload.reuploadCdnFile"_q);
+}
+
+// A dc from the config, or a CDN dc the client has keys for (the target
+// of upload.getCdnFile). For others MTP starts a session that never connects.
+[[nodiscard]] bool IsKnownDc(not_null<Main::Session*> session, int dc) {
+	const auto &options = session->mtp().dcOptions();
+	const auto id = MTP::DcId(dc);
+	if (ranges::contains(options.configEnumDcIds(), id)) {
+		return true;
+	}
+	return (id > 0)
+		&& (MTP::BareDcId(MTP::ShiftedDcId(id)) == id)
+		&& (options.dcType(MTP::ShiftedDcId(id)) == MTP::DcType::Cdn)
+		&& options.hasCDNKeysForDc(id);
 }
 
 [[nodiscard]] int FloodSeconds(const QString &type) {
@@ -271,6 +311,50 @@ void FinishCall(int key, bool ok, const QVariant &value) {
 	state.calls.erase(i);
 	if (bridge) {
 		bridge->settle(jsId, ok, value);
+	}
+}
+
+// Held by the response handlers. MTP may destroy them without a call: when
+// its instance dies (the account logs out) or when it drops a request after
+// a temporary error. Then the call is settled from here instead of staying
+// pending forever. After a normal finish this is a no-op.
+class CallGuard final {
+public:
+	explicit CallGuard(int key) : _key(key) {
+	}
+	~CallGuard() {
+		crl::on_main([key = _key] {
+			FinishCall(
+				key,
+				false,
+				u"Request was dropped by the client (logged out?)"_q);
+		});
+	}
+
+private:
+	int _key = 0;
+
+};
+
+void FeedPeerVector(
+		not_null<Main::Session*> session,
+		const Tl::TypeRef &type,
+		const mtpBuffer &reply) {
+	if (type.kind != Tl::TypeKind::Vector || !type.inner) {
+		return;
+	}
+	auto from = reply.constData();
+	const auto till = from + reply.size();
+	if (type.inner->name == u"User"_q) {
+		auto users = MTPVector<MTPUser>();
+		if (users.read(from, till)) {
+			session->data().processUsers(users);
+		}
+	} else if (type.inner->name == u"Chat"_q) {
+		auto chats = MTPVector<MTPChat>();
+		if (chats.read(from, till)) {
+			session->data().processChats(chats);
+		}
 	}
 }
 
@@ -323,8 +407,9 @@ void FeedPeers(
 		.mtp = QPointer<MTP::Instance>(mtp),
 		.requestId = requestId,
 	});
+	const auto guard = std::make_shared<CallGuard>(key);
 
-	auto done = [=](const MTP::Response &response) {
+	auto done = [=, guard = guard](const MTP::Response &response) {
 		const auto &reply = response.reply;
 		auto decodeOptions = BaseDecodeOptions();
 		if (apply) {
@@ -348,6 +433,11 @@ void FeedPeers(
 		}
 		const auto strong = weakSession.get();
 		const auto type = mtpTypeId(reply[0]);
+		if (apply && strong) {
+			// Vector<User> results like users.getUsers, the users / chats
+			// fields of an object result were fed by topLevelField.
+			FeedPeerVector(strong, resultType, reply);
+		}
 		if (apply && strong && IsUpdatesConstructor(type)) {
 			if (type == mtpc_updateShortSentMessage) {
 				// The client has no local copy of a message sent this way.
@@ -363,7 +453,9 @@ void FeedPeers(
 		FinishCall(key, true, QString::fromUtf8(decoded.json));
 		return true;
 	};
-	auto fail = [=](const MTP::Error &error, const MTP::Response &) {
+	auto fail = [=, guard = guard](
+			const MTP::Error &error,
+			const MTP::Response &) {
 		const auto code = error.code();
 		if (code < 0 || code >= 500) {
 			return false;
@@ -503,6 +595,7 @@ void FlushUpdates() {
 	const auto listeners = state.listeners;
 	for (const auto &[pluginId, listener] : listeners) {
 		auto batch = QByteArray();
+		auto count = 0;
 		auto self = PeerId();
 		const auto send = [&] {
 			if (batch.isEmpty()) {
@@ -516,6 +609,7 @@ void FlushUpdates() {
 				});
 			}
 			batch.clear();
+			count = 0;
 		};
 		for (auto i = 0; i != int(queue.size()); ++i) {
 			const auto &entry = queue[i];
@@ -531,6 +625,9 @@ void FlushUpdates() {
 			}
 			batch.append(batch.isEmpty() ? '[' : ',');
 			batch.append(text);
+			if (++count >= kMaxUpdatesPerDispatch) {
+				send();
+			}
 		}
 		send();
 	}
@@ -673,16 +770,21 @@ DZG_API_MODULE({
 				return method + u": not available to plugins"_q;
 			}
 			const auto dc = options.value(u"dc"_q).toInt();
-			const auto dcId = (dc > 0)
-				? MTP::downloadDcId(dc, 0)
-				: IsFileMethod(method)
-				? MTP::downloadDcId(session->mtp().mainDcId(), 0)
-				: MTP::ShiftedDcId(0);
+			if (dc > 0 && !IsKnownDc(session, dc)) {
+				return method + u": unknown dc %1"_q.arg(dc);
+			}
+			auto file = IsFileMethod(method);
 			auto encodeOptions = Tl::EncodeOptions();
 			encodeOptions.resolve = [=](
 					const QString &type,
 					const QJsonValue &value) {
 				return ResolveInput(session, type, value);
+			};
+			encodeOptions.check = [&](
+					const Tl::Combinator &called,
+					const QJsonObject &params) {
+				file = file || IsFileMethod(called.name);
+				return RefuseReason(called, params);
 			};
 			const auto encoded = Tl::EncodeMethod(
 				Schema(),
@@ -692,6 +794,11 @@ DZG_API_MODULE({
 			if (!encoded.ok()) {
 				return method + u": "_q + encoded.error;
 			}
+			const auto dcId = (dc > 0)
+				? MTP::downloadDcId(dc, 0)
+				: file
+				? MTP::downloadDcId(session->mtp().mainDcId(), 0)
+				: MTP::ShiftedDcId(0);
 			return StartCall(bridge, session, encoded, options, dcId);
 		} });
 		out.push_back({ "api_input", [](const Args &args) -> QVariant {
@@ -782,9 +889,14 @@ DZG_API_MODULE({
 			};
 		} });
 		out.push_back({ "api_setUpdateTypes", [=](const Args &args) -> QVariant {
-			SetUpdateTypes(
-				bridge->instance()->manifest().id,
-				args.value(0).toList());
+			const auto instance = bridge->instance();
+			const auto &id = instance->manifest().id;
+			// dzg.on('unload', off) runs after pluginUnloaded() dropped the
+			// listener: don't bring it back for an unloading plugin.
+			if (Manager::Exists()
+				&& Manager::Get().instance(id) == instance.get()) {
+				SetUpdateTypes(id, args.value(0).toList());
+			}
 			return QVariant();
 		} });
 	},
@@ -859,6 +971,8 @@ DZG_API_MODULE({
 		return value;
 	};
 	const toJson = (value) => JSON.stringify((value === undefined) ? {} : value, replacer);
+	// Options go to C++ as int: no NaN, Infinity or out of range values.
+	const toInt = (value) => Math.min(Math.max(0, Math.ceil(Number(value) || 0)), 0x7FFFFFFF);
 
 	const makeError = (text) => {
 		const error = new Error(String(text));
@@ -901,10 +1015,10 @@ DZG_API_MODULE({
 			let failure = null;
 			const promise = internal.request(() => {
 				const result = native.api_call(String(method), toJson(params || {}), {
-					timeout: Math.max(0, Number(o.timeout) || 0),
-					floodSleep: (o.floodSleep === undefined) ? 10 : Math.max(0, Number(o.floodSleep) || 0),
+					timeout: toInt(o.timeout),
+					floodSleep: (o.floodSleep === undefined) ? 10 : toInt(o.floodSleep),
 					applyResult: o.applyResult !== false,
-					dc: Math.max(0, Number(o.dc) || 0),
+					dc: toInt(o.dc),
 				});
 				if (typeof result === 'number' && result > 0) return result;
 				failure = String(result || 'Request was not started');

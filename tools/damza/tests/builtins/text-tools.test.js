@@ -87,3 +87,10 @@ const theirs = mock.message({ id: 10, text: 'rfr ltkf' });
 mock.menuClick('message', theirs, 'Исправить раскладку');
 eq(mock.clipboard, 'как дела');
 assert(mock.menu('message', mock.message({ text: '0J/RgNC40LLQtdGC' })).some((i) => i.title.includes('base64')));
+
+// Run without an open chat (palette, dzg.commands.run): no crash, no send.
+const sentBefore = mock.sent.length;
+sandbox.dispatch('builtin:run', { text: '/shrug ну', chat: null, peerId: '', replyTo: 0 });
+eq(mock.sent.length, sentBefore, 'nothing sent without a chat');
+eq(mock.clipboard, 'ну ¯\\_(ツ)_/¯');
+assert(mock.toasts[mock.toasts.length - 1].includes('Чат не открыт'), mock.toasts[mock.toasts.length - 1]);

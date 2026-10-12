@@ -18,13 +18,18 @@ namespace {
 	return bridge->instance()->manifest().id;
 }
 
+[[nodiscard]] UiExt::Callback MakeCallback(
+		not_null<Bridge*> bridge,
+		const QVariant &id) {
+	return { PluginId(bridge), id.toInt(), bridge.get() };
+}
+
 [[nodiscard]] UiExt::ButtonSpec ParseButton(
 		not_null<Bridge*> bridge,
 		const QVariantMap &map) {
-	const auto pluginId = PluginId(bridge);
 	return {
-		.click = { pluginId, map.value(u"click"_q).toInt() },
-		.when = { pluginId, map.value(u"when"_q).toInt() },
+		.click = MakeCallback(bridge, map.value(u"click"_q)),
+		.when = MakeCallback(bridge, map.value(u"when"_q)),
 		.icon = map.value(u"icon"_q).toString(),
 		.text = map.value(u"text"_q).toString(),
 		.tooltip = map.value(u"tooltip"_q).toString(),
@@ -60,14 +65,14 @@ DZG_API_MODULE({
 		out.push_back({ "ui_addMainMenuItem", [=](const Args &a) {
 			const auto spec = map(a, 0);
 			return QVariant(UiExt::AddMainMenuItem({
-				.click = { PluginId(bridge), spec.value(u"click"_q).toInt() },
+				.click = MakeCallback(bridge, spec.value(u"click"_q)),
 				.title = spec.value(u"title"_q).toString(),
 				.icon = spec.value(u"icon"_q).toString(),
 			}));
 		} });
 		out.push_back({ "ui_addShortcut", [=](const Args &a) {
 			return QVariant(UiExt::AddShortcut(
-				{ PluginId(bridge), num(a, 1) },
+				MakeCallback(bridge, num(a, 1)),
 				str(a, 0)));
 		} });
 		out.push_back({ "ui_remove", [=](const Args &a) {
@@ -78,7 +83,7 @@ DZG_API_MODULE({
 			return QVariant();
 		} });
 		out.push_back({ "ui_notify", [=](const Args &a) {
-			UiExt::Notify(PluginId(bridge), map(a, 0));
+			UiExt::Notify(bridge, map(a, 0));
 			return QVariant();
 		} });
 		out.push_back({ "ui_openLink", [=](const Args &a) {
@@ -281,10 +286,12 @@ DZG_API_MODULE({
 	};
 
 	let currentPanel = null;
+	// Open panel objects by id: the client may report a close after the
+	// plugin already got a new panel (window closed with the panel in it).
+	const openPanels = new Map();
 	internal.on('ui:panelClosed', (p) => {
-		if (currentPanel && p && currentPanel.id === p.id) {
-			currentPanel.__markClosed();
-		}
+		const panel = p && openPanels.get(p.id);
+		if (panel) panel.__markClosed();
 	});
 
 	const makePanel = (id, contentId) => {
@@ -387,10 +394,12 @@ DZG_API_MODULE({
 				if (!open) return;
 				open = false;
 				forgetWidgets();
+				if (openPanels.get(id) === panel) openPanels.delete(id);
 				if (currentPanel === panel) currentPanel = null;
 				for (const fn of closeHandlers.slice()) internal.safe('panel.on(close)', fn, panel);
 			},
 		});
+		openPanels.set(id, panel);
 		return panel;
 	};
 
