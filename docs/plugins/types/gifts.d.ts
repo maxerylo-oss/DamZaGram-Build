@@ -35,6 +35,8 @@ interface DzgGifts {
    * Возвращает функцию отписки.
    */
   onOffer(handler: (offer: GiftOffer) => void): () => void;
+  /** Закрыть окна подарка и профиля, вернуться к чату. */
+  close(): void;
 }
 
 interface Dzg {

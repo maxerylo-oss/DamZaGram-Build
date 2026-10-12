@@ -24,6 +24,7 @@
 #include "main/main_session.h"
 #include "ui/layers/box_content.h"
 #include "ui/layers/generic_box.h"
+#include "window/window_controller.h"
 
 namespace Damza::Plugins {
 namespace {
@@ -107,6 +108,14 @@ DZG_API_MODULE({
 			}
 			return QVariant();
 		} });
+		out.push_back({ "gifts_close", [](const QVariantList &) {
+			if (Manager::Exists()) {
+				if (const auto window = Manager::Get().activeWindow()) {
+					window->hideLayer();
+				}
+			}
+			return QVariant();
+		} });
 	},
 	.prelude = [] {
 		return QString::fromUtf8(R"DZG_JS(
@@ -117,6 +126,8 @@ DZG_API_MODULE({
 		}
 	});
 	dzg.gifts = {
+		// Закрыть окна подарка и профиля, вернуться в чат.
+		close() { native.gifts_close(); },
 		onOffer(fn) {
 			if (typeof fn !== 'function') {
 				throw new TypeError('onOffer expects a function');

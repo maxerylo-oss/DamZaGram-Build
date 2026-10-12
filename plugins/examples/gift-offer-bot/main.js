@@ -37,7 +37,12 @@ dzg.gifts.onOffer(async (offer) => {
       return;
     }
     const ok = dzg.messages.send(bot, command);
-    dzg.ui.toast(ok ? ('Команда отправлена @' + botName) : 'Не удалось отправить', 'Оффер через бота');
+    if (ok) {
+      dzg.ui.toast('Предложение о покупке отправлено', 'Успешно');
+      dzg.gifts.close(); // закрыть окна подарка и профиля, вернуться в чат
+    } else {
+      dzg.ui.alert('Не удалось отправить команду боту.', 'Оффер через бота');
+    }
   } catch (e) {
     dzg.ui.alert('Ошибка: ' + e, 'Оффер через бота');
   }

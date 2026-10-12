@@ -535,6 +535,7 @@ From the repo root (needs `out-qjs/qjs`, built from `Telegram/ThirdParty/quickjs
 Тип `DzgGifts`.
 
 - `onOffer(handler: (offer: GiftOffer) => void): () => void` — Перехватить «Предложить оффер» у NFT-подарков. Пока есть хотя бы один обработчик, клиент показывает то же окно (сумма и валюта), а на подтверждении вызывает обработчик вместо отправки реального оффера. Возвращает функцию отписки.
+- `close(): void` — Закрыть окна подарка и профиля, вернуться к чату.
 
 ## События
 
@@ -1173,7 +1174,7 @@ TL-объект в JSON. Конструктор пишется в поле `_`, 
 - `title: string` — Название подарка, например 'Plush Pepe #123'.
 - `amount: string` — Сумма из окна десятичной строкой: '100' (Stars) или '2.5' (TON).
 - `amountNumber: number` — Та же сумма числом.
-- `currency: 'ton' | 'stars'` — Валюта из окна.
+- `currency: 'ton' | 'stars'` — Валюта из окна: 'ton' (бот ждёт 'gram') или 'stars'.
 - `duration: number` — Срок действия оффера в секундах (0 — без срока).
 - `ownerId: PeerId` — id владельца подарка (Peer id).
 - `ownerUsername: string` — @username владельца без @ ('' если нет).
@@ -3029,7 +3030,7 @@ interface GiftOffer {
   amount: string;
   /** Та же сумма числом. */
   amountNumber: number;
-  /** Валюта из окна. */
+  /** Валюта из окна: 'ton' (бот ждёт 'gram') или 'stars'. */
   currency: 'ton' | 'stars';
   /** Срок действия оффера в секундах (0 — без срока). */
   duration: number;
@@ -3049,6 +3050,8 @@ interface DzgGifts {
    * Возвращает функцию отписки.
    */
   onOffer(handler: (offer: GiftOffer) => void): () => void;
+  /** Закрыть окна подарка и профиля, вернуться к чату. */
+  close(): void;
 }
 
 interface Dzg {
