@@ -47,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_setup_email.h"
 #include "window/window_media_preview.h"
 #include "styles/style_window.h"
+#include "damza/plugins/ui/ui_hooks.h"
 
 #include <QtGui/QWindow>
 
@@ -755,6 +756,7 @@ void MainWindow::updateControlsGeometry() {
 			mainWidth -= skip;
 		}
 	}
+	mainWidth -= Damza::Plugins::PlaceSidePanels(this, QRect(body.x() + mainLeft, body.y(), mainWidth, body.height())); // DamZaGram
 	if (_main) {
 		_main->setGeometry({
 			body.x() + mainLeft,

@@ -233,7 +233,7 @@ bool GenerateDesktopFile(
 	DEBUG_LOG(("App Info: placing .desktop file to %1").arg(targetPath));
 	if (!QDir(targetPath).exists()) QDir().mkpath(targetPath);
 
-	const auto sourceFile = u":/misc/com.ayugram.desktop.desktop"_q;
+	const auto sourceFile = u":/misc/com.damzagram.desktop.desktop"_q;
 	const auto targetFile = targetPath
 		+ QGuiApplication::desktopFileName()
 		+ u".desktop"_q;
@@ -738,11 +738,11 @@ void start() {
 		}
 
 		if (!Core::UpdaterDisabled()) {
-			return u"com.ayugram.desktop._%1"_q.arg(
+			return u"com.damzagram.desktop._%1"_q.arg(
 				Core::Launcher::Instance().instanceHash().constData());
 		}
 
-		return u"com.ayugram.desktop"_q;
+		return u"com.damzagram.desktop"_q;
 	}());
 
 	LOG(("App ID: %1").arg(QGuiApplication::desktopFileName()));

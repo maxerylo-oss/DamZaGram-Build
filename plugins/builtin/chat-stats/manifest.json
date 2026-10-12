@@ -1,0 +1,40 @@
+{
+  "id": "chat-stats",
+  "name": "Статистика чата",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "builtin": true,
+  "description": "📊 Кто пишет больше всех, в какие часы и дни чат живой, любимые слова и эмодзи, медиа и ссылки — по последним сообщениям чата. Пункт меню чата и /stats.",
+  "settings": [
+    {
+      "key": "count",
+      "type": "number",
+      "title": "Сколько последних сообщений анализировать",
+      "default": 1000,
+      "min": 10,
+      "max": 5000
+    },
+    {
+      "key": "topAuthors",
+      "type": "number",
+      "title": "Сколько авторов показывать",
+      "default": 8,
+      "min": 1,
+      "max": 50
+    },
+    {
+      "key": "topWords",
+      "type": "number",
+      "title": "Сколько слов показывать",
+      "default": 12,
+      "min": 1,
+      "max": 50
+    },
+    {
+      "key": "stopWords",
+      "type": "text",
+      "title": "Свои стоп-слова (через пробел или с новой строки)",
+      "default": ""
+    }
+  ]
+}

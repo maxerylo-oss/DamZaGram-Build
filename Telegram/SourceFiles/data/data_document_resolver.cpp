@@ -40,6 +40,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ui/boxes/plugin_info_box.h"
+#include "damza/ui/plugin_boxes.h"
 #include <QtCore/QFile>
 
 
@@ -308,6 +309,9 @@ void ResolveDocument(
 		}
 	} else {
 		document->saveFromDataSilent();
+		if (Damza::PluginsUi::OpenPluginFile(controller, document->filename(), document->filepath(true))) { // DamZaGram
+			return;
+		}
 		if (openPluginInfo()) {
 			return;
 		}

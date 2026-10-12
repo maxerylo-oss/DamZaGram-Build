@@ -34,6 +34,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QClipboard>
 
 // AyuGram includes
+#include "damza/damza_brand.h"
+#include "damza/ui/welcome_box.h"
 #include "window/window_session_controller.h"
 #include "window/window_session_controller_link_info.h"
 
@@ -41,22 +43,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace {
 
 rpl::producer<TextWithEntities> Text() {
-	return tr::lng_about_text2(
-		lt_gpl_link,
-		rpl::single(Ui::Text::Link(
-			"GNU GPL",
-			"https://github.com/AyuGram/AyuGramDesktop/blob/dev/LICENSE")),
-		lt_github_link,
-		rpl::single(Ui::Text::Link(
-			"GitHub",
-			"https://github.com/AyuGram/AyuGramDesktop")),
-		tr::marked);
+	return rpl::single(Damza::Brand::AboutText()); // DamZaGram
 }
 
 } // namespace
 
 void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controller) {
-	box->setTitle(rpl::single(u"AyuGram Desktop"_q));
+	box->setTitle(rpl::single(Damza::Brand::FullName())); // DamZaGram
 
 	auto layout = box->verticalLayout();
 
@@ -74,6 +67,10 @@ void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controll
 			st::boxRowPadding.right(),
 			st::boxRowPadding.bottom()));
 	version->setClickedCallback([=] {
+		if (controller) {
+			Damza::ShowWelcomeBox(controller); // DamZaGram
+			return;
+		}
 		File::OpenUrl(Core::App().changelogLink());
 	});
 
@@ -91,12 +88,12 @@ void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controll
 
 	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
 	box->addLeftButton(
-		rpl::single(QString("@AyuGramReleases")),
+		rpl::single(Damza::Brand::AuthorHandle()),
 		[box, controller]
 		{
 			box->closeBox();
 			controller->showPeerByLink(Window::PeerByLinkInfo{
-				.usernameOrId = QString("ayugramreleases"),
+				.usernameOrId = QString(Damza::Brand::kAuthorUsername),
 			});
 		});
 

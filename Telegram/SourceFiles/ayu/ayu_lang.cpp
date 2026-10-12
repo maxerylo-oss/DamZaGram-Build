@@ -6,6 +6,8 @@
 // Copyright @Radolyn, 2026
 #include "ayu/ayu_lang.h"
 
+#include "damza/damza_brand.h"
+
 #include "qjsondocument.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -206,8 +208,11 @@ void AyuLanguage::applyLanguageJson(QJsonDocument doc) {
 			val = val.replace(qsl("%1$s"), qsl("{item1}")).replace(qsl("%2$s"), qsl("{item2}"));
 		}
 
+		val = Damza::Brand::TranslatedValue(key, std::move(val)); // DamZaGram
+
 		Lang::GetInstance().resetValue(key.toUtf8());
 		Lang::GetInstance().applyValue(key.toUtf8(), val.toUtf8());
 	}
+	Damza::Brand::ApplyLanguageOverrides(); // DamZaGram
 	Lang::GetInstance().updatePluralRules();
 }

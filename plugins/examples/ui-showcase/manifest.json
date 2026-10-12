@@ -1,0 +1,12 @@
+{
+  "id": "ui-showcase",
+  "name": "UI Showcase",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Витрина всех UI-расширений DamZaGram: кнопки в шапке чата и у поля ввода, пункт главного меню, горячая клавиша Ctrl+Shift+U, боковая панель, уведомления, ссылки и подмена текста сообщений при отрисовке.",
+  "main": "main.js",
+  "settings": [
+    { "key": "shortcut", "type": "string", "title": "Горячая клавиша панели", "default": "Ctrl+Shift+U" },
+    { "key": "censor", "type": "text", "title": "Слова, которые прятать в сообщениях (через запятую)", "default": "спойлер, концовка" }
+  ]
+}

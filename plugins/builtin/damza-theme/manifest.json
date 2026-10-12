@@ -1,0 +1,52 @@
+{
+  "id": "damza-theme",
+  "name": "Тема DamZaGram",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "builtin": true,
+  "description": "Фирменные акценты DamZaGram поверх любой темы: Monolith (лайм на тёмном), Glass (тёплый коралл), Rail (оранжевый). Отдельные оттенки для ночного и дневного режима, /theme и выбор в главном меню.",
+  "settings": [
+    {
+      "key": "preset",
+      "type": "select",
+      "options": [
+        {
+          "value": "Monolith",
+          "title": "Monolith — лайм #C8F135 на тёмном"
+        },
+        {
+          "value": "Glass",
+          "title": "Glass — тёплый коралл #FF8A5B"
+        },
+        {
+          "value": "Rail",
+          "title": "Rail — оранжевый #C2410C"
+        },
+        {
+          "value": "None",
+          "title": "None — цвета текущей темы"
+        }
+      ],
+      "title": "Пресет",
+      "default": "Monolith"
+    },
+    {
+      "key": "applyDay",
+      "type": "bool",
+      "title": "Применять и в дневном режиме",
+      "default": true
+    },
+    {
+      "key": "bubbles",
+      "type": "bool",
+      "title": "Красить исходящие сообщения",
+      "default": true
+    },
+    {
+      "key": "chatList",
+      "type": "bool",
+      "title": "Красить выбранный чат в списке",
+      "default": true
+    }
+  ]
+}

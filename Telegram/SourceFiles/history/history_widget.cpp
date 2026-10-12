@@ -224,6 +224,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/features/forward/ayu_forward.h"
 #include "boxes/abstract_box.h"
+#include "damza/plugins/ui/ui_hooks.h"
 
 
 namespace {
@@ -605,6 +606,7 @@ HistoryWidget::HistoryWidget(
 	initSendAsFileButton();
 	initExpandButton();
 	initDiscardRichDraftButton();
+	Damza::Plugins::RegisterComposeField(this, _field.data(), [=] { return _peer; }, [=] { updateFieldSize(); }); // DamZaGram
 
 	_fieldCharsCountManager.limitExceeds(
 	) | rpl::on_next([=] {
@@ -7654,6 +7656,7 @@ void HistoryWidget::moveFieldControls() {
 		_scheduled->moveToRight(right, buttonsBottom);
 		right += _scheduled->width();
 	}
+	right += Damza::Plugins::PlaceComposeButtons(this, right, buttonsBottom, !_field->isHidden()); // DamZaGram
 	if (_ttlInfo) {
 		_ttlInfo->move(width() - right - _ttlInfo->width(), buttonsBottom);
 	}
@@ -7726,6 +7729,7 @@ void HistoryWidget::updateFieldSize() {
 	if (_scheduled && !_scheduled->isHidden()) {
 		fieldWidth -= _scheduled->width();
 	}
+	fieldWidth -= Damza::Plugins::ComposeButtonsWidth(this, !_field->isHidden()); // DamZaGram
 	if (_ttlInfo && _ttlInfo->isVisible() && settings.showAutoDeleteButtonInMessageField()) {
 		fieldWidth -= _ttlInfo->width();
 	}

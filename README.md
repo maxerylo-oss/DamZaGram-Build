@@ -1,156 +1,187 @@
-# AyuGram
+<div align="center">
 
-![AyuGram Logo](.github/AyuGram.png) ![AyuChan](.github/AyuChan.png)
+<img src="docs/assets/damzagram_logo.png" width="128" height="128" alt="DamZaGram logo">
 
-[ English  |   [Русский](README-RU.md) ]
+# DamZaGram
+
+**A Telegram client you can program.**
+
+Everything [AyuGram](https://github.com/AyuGram/AyuGramDesktop) has — ghost mode, anti-recall, deep customization —
+plus a full **JavaScript plugin system** with hot reload, built-in plugins and a DevTools console.
+
+by [**@wetakush**](https://t.me/wetakush)
+
+[ English | [Русский](README-RU.md) ]
+
+</div>
 
 ## Features
 
-- Full ghost mode (flexible)
-- Messages history
+### Everything from AyuGram
+
+- Full ghost mode (flexible): no read receipts, no online, no typing, stories viewed in secret
+- Message history: deleted and edited messages are kept and marked
 - Anti-recall
-- Font customization
-- Streamer mode
+- Message filters (regex, per chat, shared filter lists)
+- Font customization, app icons, streamer mode
 - Local Telegram Premium
 - Translator
-- Media preview & quick reaction on force click (macOS)
-- Enhanced appearance
+- Enhanced appearance and lots of small tweaks
 
-And many more. Check out our [Documentation](https://docs.ayugram.one/desktop/).
+AyuGram's own documentation still applies to all of these: [docs.ayugram.one](https://docs.ayugram.one/desktop/).
 
-<h3>
-  <details>
-    <summary>Preview</summary>
-    <table>
-      <tr>
-        <td><img src='.github/demos/demo1.png' width='268' alt='Preferences'></td>
-        <td><img src='.github/demos/demo2.png' width='268' alt='AyuGram Options'></td>
-        <td><img src='.github/demos/demo3.png' width='268' alt='Message Filters'></td>
-      </tr>
-      <tr>
-        <td><img src='.github/demos/demo4.png' width='268' alt='Appearance'></td>
-        <td><img src='.github/demos/demo5.png' width='268' alt='Chats'></td>
-      </tr>
-    </table>
-  </details>
-</h3>
+### JavaScript plugins
 
-## Downloads
+- **Modern JavaScript.** Plugins run on [QuickJS-ng](https://github.com/quickjs-ng/quickjs) (ES2023):
+  `async`/`await`, ES modules, classes, `import`/`export`, top-level `await` in the console.
+- **Access to everything.** Chats, messages (send, edit, delete, forward, react, search, download),
+  users and accounts, events (`message.new`, `message.edited`, `message.deleted`, `chat.opened`, …),
+  message filters, pre-send hooks and `/commands`, context-menu items, buttons in the UI, boxes, toasts,
+  native widgets, theme colors, HTTP, files, clipboard.
+- **Hot reload.** Save `main.js` and the plugin restarts instantly, no client restart.
+- **DevTools console.** Run JavaScript against the live client and watch plugin logs
+  (Settings → DamZaGram Preferences → Plugins → DevTools, `Ctrl+Enter` to run).
+- **Settings for free.** Describe settings in `manifest.json` and DamZaGram draws the UI.
+- **Typed API.** TypeScript definitions in [`docs/plugins/types`](docs/plugins/types) give autocompletion in any editor.
 
-### Windows
+Full documentation: [`docs/plugins`](docs/plugins).
 
-#### Official
+### Built-in plugins
 
-You can download prebuilt Windows binary from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases) or from
-the [Telegram channel](https://t.me/AyuGramReleases).
+Shipped with the client and enabled in one click (Settings → DamZaGram Preferences → Plugins):
 
-#### Winget
+| Plugin | What it does |
+|---|---|
+| Command palette | `Ctrl+K`: fuzzy search over chats, plugin commands and client actions |
+| Deleted messages | Tells you who deleted what and where; journal of deleted messages |
+| Keyword alerts | Notifies when a word or `/regex/` appears in any chat |
+| Reminders | `/remind 10m buy bread`, `/remind 18:30 call`, "Remind me…" in the message menu |
+| Auto-reply | "Away" mode for private chats |
+| Chat stats | Who writes the most, active hours and days, top words and emoji |
+| Text tools | `/calc`, wrong-layout fix ("ghbdtn" → "привет"), `/upper` `/mock` `/b64`…, `:shrug:` auto-replace |
+| AI digest | "What did I miss": a summary of the latest messages of a chat |
 
-```bash
-winget install RadolynLabs.AyuGramDesktop
+The source of each one lives in [`plugins/builtin`](plugins/builtin) — a good place to learn the API.
+
+### Your first plugin in 30 seconds
+
+Open **Settings → DamZaGram Preferences → Plugins → Open plugins folder** (`<data>/tdata/plugins/`),
+create a folder `hello` with two files:
+
+`manifest.json`
+```json
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "author": "you",
+  "settings": [
+    { "key": "word", "type": "string", "title": "Word to watch", "default": "hello" }
+  ]
+}
 ```
 
-#### Scoop
-
-```bash
-scoop bucket add extras
-scoop install ayugram
+`main.js`
+```js
+dzg.on('message.new', (m) => {
+  if (!m.out && m.text.includes(dzg.settings.get('word'))) {
+    dzg.ui.toast(`${m.fromName} in «${m.chat.name}»: ${m.text}`);
+  }
+});
 ```
 
-#### Self-built
+Turn it on in **Plugins**. Edit `main.js`, save — it reloads by itself.
 
-Follow [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-win-x64.md) if you want to
-build by yourself.
+> Plugins get **full access** to the client, your account, files and network. Install only code you trust.
 
-### macOS
+## Data folder
 
-#### Official
+DamZaGram keeps its data separately from Telegram Desktop and AyuGram, so all three can be installed side by side:
 
-You can download prebuilt macOS package from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases).
+| OS | Folder |
+|---|---|
+| Linux | `~/.local/share/DamZaGramDesktop` |
+| Windows | `%APPDATA%\DamZaGram Desktop` |
+| macOS | `~/Library/Application Support/DamZaGram Desktop` |
 
-#### Homebrew
+Use `-workdir <path>` to run with any other folder. Linux application id: `com.damzagram.desktop`.
 
-```bash
-brew install --cask ayugram
-```
+## Building on Arch Linux
 
-### Arch Linux
-
-#### From source (recommended)
-
-Install `ayugram-desktop` from [AUR](https://aur.archlinux.org/packages/ayugram-desktop).
-
-#### Prebuilt binaries
-
-Install `ayugram-desktop-bin` from [AUR](https://aur.archlinux.org/packages/ayugram-desktop-bin).
-
-Note: these binaries aren't officially maintained by us.
-
-### NixOS
-
-#### Flake (recommended)
-
-Install `ayugram-desktop` from [ndfined-crp/ayugram-desktop](https://github.com/ndfined-crp/ayugram-desktop)
-
-#### Nixpkgs
-
-Install `ayugram-desktop` from [nixpkgs](https://search.nixos.org/packages?channel=unstable&show=ayugram-desktop)
-
-### ALT Linux
-
-[Sisyphus](https://packages.altlinux.org/en/sisyphus/srpms/ayugram-desktop/)
-
-### Gentoo Linux
-
-See [this repository](https://codeberg.org/OverLessArtem/ayugram-ebuild-gentoo) for installation manual.
-
-### Void Linux
-See [this repository](https://codeberg.org/OverLessArtem/ayugram-template-void) for installation manual.
-
-### EPM
-
-`epm play ayugram`
-
-### Fedora
-
-From [RPM Fusion](https://admin.rpmfusion.org/pkgdb/package/free/ayugram-desktop/) repository.
+### 1. Dependencies
 
 ```bash
-dnf install ayugram-desktop
+sudo pacman -S --needed base-devel git cmake ninja python mold ccache \
+  qt6-base qt6-svg qt6-wayland qt6-imageformats qt6-declarative qt6-shadertools qt6-5compat qt6-tools \
+  abseil-cpp ada boost fmt range-v3 tl-expected microsoft-gsl extra-cmake-modules wayland-protocols \
+  ffmpeg openal openh264 openssl protobuf lz4 xxhash minizip hunspell rnnoise pipewire \
+  glibmm-2.68 libsigc++-3.0 gobject-introspection kcoreaddons jemalloc \
+  libjxl libavif libheif libvpx libxcomposite libxdamage libxrandr libxtst libxkbcommon libdrm \
+  webkit2gtk-4.1 python-packaging
+# not in the official repos — take them from the AUR:
+yay -S --needed libtg_owt tlottie qrcodegencpp-cmake
 ```
 
-### Any other Linux distro
+### 2. tde2e (end-to-end encryption library from TDLib)
 
-Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
+```bash
+git clone https://github.com/tdlib/td.git ../DamZaGram-deps/tde2e
+cmake -S ../DamZaGram-deps/tde2e -B ../DamZaGram-deps/tde2e/build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DTD_E2E_ONLY=ON \
+  -DCMAKE_INSTALL_PREFIX="$PWD/../DamZaGram-deps/tde2e/install"
+cmake --build ../DamZaGram-deps/tde2e/build --target install
+```
 
-Or follow the [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
+### 3. Configure and build
 
-## Donation
+Get your own `api_id` / `api_hash` at [my.telegram.org](https://my.telegram.org) (see [docs/api_credentials.md](docs/api_credentials.md)).
 
-Enjoy using **AyuGram**? Consider sending us a tip!
+```bash
+git clone --recursive <this repository> DamZaGram && cd DamZaGram
+cmake -S . -B out -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DTDESKTOP_API_ID=YOUR_API_ID \
+  -DTDESKTOP_API_HASH=YOUR_API_HASH \
+  -Dtde2e_DIR="$PWD/../DamZaGram-deps/tde2e/install/lib/cmake/tde2e" \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold
+cmake --build out --target Telegram
+./out/bin/DamZaGram
+```
 
-[Here's available methods.](https://docs.ayugram.one/donate/)
+Use `-DCMAKE_BUILD_TYPE=Release` for a fast binary (the build takes much longer).
+
+### 4. Add it to the app menu (optional)
+
+```bash
+tools/damza/install-desktop-entry.sh            # registers out/bin/DamZaGram for your user
+tools/damza/install-desktop-entry.sh --uninstall
+```
+
+Or install system-wide with `sudo cmake --install out`.
+
+### Developer tools
+
+- `tools/damza/check.py <file.cpp>` — syntax-only compile of a single file with the real flags, in seconds.
+- `tools/damza/sandbox.py <plugin/main.js> [test.js]` — runs a plugin against the real JS API in plain QuickJS with a mocked client.
 
 ## Credits
 
-### Telegram clients
+DamZaGram is made by [@wetakush](https://t.me/wetakush). It stands on the shoulders of:
 
-- [Telegram Desktop](https://github.com/telegramdesktop/tdesktop)
-- [Kotatogram](https://github.com/kotatogram/kotatogram-desktop)
-- [64Gram](https://github.com/TDesktop-x64/tdesktop)
-- [Forkgram](https://github.com/forkgram/tdesktop)
+- [**AyuGram Desktop**](https://github.com/AyuGram/AyuGramDesktop) by Radolyn Labs — the base of DamZaGram and all of its ghost-mode
+  and customization features. Please support the original authors: [docs.ayugram.one/donate](https://docs.ayugram.one/donate/).
+- [**Telegram Desktop**](https://github.com/telegramdesktop/tdesktop) by Telegram FZ-LLC.
+- [**QuickJS-ng**](https://github.com/quickjs-ng/quickjs) — the JavaScript engine behind the plugins (MIT).
+- Clients AyuGram credits: [Kotatogram](https://github.com/kotatogram/kotatogram-desktop),
+  [64Gram](https://github.com/TDesktop-x64/tdesktop), [Forkgram](https://github.com/forkgram/tdesktop).
+- Libraries: [JSON for Modern C++](https://github.com/nlohmann/json), [SQLite](https://github.com/sqlite/sqlite),
+  [sqlite_orm](https://github.com/fnc12/sqlite_orm), [androidx sources](https://github.com/androidx/androidx).
+- Icons: [Solar Icon Set](https://www.figma.com/community/file/1166831539721848736).
 
-### Libraries used
+## License
 
-- [JSON for Modern C++](https://github.com/nlohmann/json)
-- [SQLite](https://github.com/sqlite/sqlite)
-- [sqlite_orm](https://github.com/fnc12/sqlite_orm)
-- [androidx sources](https://github.com/androidx/androidx)
-
-### Icons
-
-- [Solar Icon Set](https://www.figma.com/community/file/1166831539721848736)
-
-### Bots
-
-- [TelegramDB](https://t.me/tgdatabase) for username lookup by ID (until closing free inline mode at 2 April 2026)
+DamZaGram, like Telegram Desktop and AyuGram, is free software licensed under the
+[GNU GPL version 3](LICENSE) with the OpenSSL exception. See [LEGAL](LEGAL).
+DamZaGram is an unofficial client and is not affiliated with Telegram or Radolyn Labs.

@@ -79,6 +79,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_styles.h"
+#include "damza/plugins/ui/ui_hooks.h"
 
 
 namespace HistoryView {
@@ -2285,7 +2286,7 @@ void Element::validateText() {
 		if (!unavailable.isEmpty()) {
 			setTextWithLinks(tr::italic(unavailable));
 		} else {
-			setTextWithLinks(_textItem->translatedTextWithLocalEntities());
+			setTextWithLinks(Damza::Plugins::DisplayText(_textItem, _textItem->translatedTextWithLocalEntities())); // DamZaGram
 			richPage = _textItem->translatedRichPage();
 		}
 	}

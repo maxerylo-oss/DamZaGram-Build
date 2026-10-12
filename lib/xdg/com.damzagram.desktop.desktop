@@ -1,0 +1,22 @@
+[Desktop Entry]
+Name=DamZaGram Desktop
+Comment=Telegram client with JavaScript plugins, based on AyuGram
+TryExec=DamZaGram
+Exec=env DESKTOPINTEGRATION=1 DamZaGram -- %U
+Icon=com.damzagram.desktop
+Terminal=false
+StartupWMClass=DamZaGram
+Type=Application
+Categories=Chat;Network;InstantMessaging;Qt;
+MimeType=x-scheme-handler/tg;x-scheme-handler/tonsite;
+Keywords=tg;chat;im;messaging;messenger;sms;telegram;tdesktop;damzagram;ayugram;plugins;
+Actions=quit;
+DBusActivatable=true
+SingleMainWindow=true
+X-GNOME-UsesNotifications=true
+X-GNOME-SingleWindow=true
+
+[Desktop Action quit]
+Exec=DamZaGram -quit
+Name=Quit DamZaGram
+Icon=application-exit

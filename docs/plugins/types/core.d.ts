@@ -225,6 +225,8 @@ interface CreateProps {
   radius?: number;
   onClick?: (widget: Widget) => void;
   onChange?: (widget: Widget, value: string | boolean) => void;
+  /** input: Enter (Ctrl+Enter в многострочном поле). */
+  onSubmit?: (widget: Widget, value: string) => void;
   on?: {
     click?: (widget: Widget) => void;
     change?: (widget: Widget, value: string | boolean) => void;
@@ -270,7 +272,8 @@ interface DzgUi {
   toast(text: string, title?: string): void;
   box(spec: BoxSpec): Promise<BoxResult>;
   alert(text: string, title?: string): Promise<void>;
-  confirm(text: string, options?: { title?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
+  /** true, если нажали кнопку подтверждения. danger — красная кнопка. */
+  confirm(text: string, options?: { title?: string; confirmText?: string; cancelText?: string; danger?: boolean }): Promise<boolean>;
   /** null, если пользователь отменил. */
   prompt(title: string, options?: {
     text?: string; placeholder?: string; value?: string; multiline?: boolean;
@@ -356,6 +359,14 @@ interface Dzg {
   once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
 
   log(...args: unknown[]): void;
+  /**
+   * CommonJS-модуль из папки плагина: `module.exports` файла, путь от папки плагина.
+   * Модуль выполняется один раз и кешируется. В ES-модулях удобнее `import`.
+   */
+  require<T = any>(path: string): T;
+  /** Постоянное хранилище плагина: tdata/plugins_data/<id>.json. */
+  storage: DzgStorage;
+  /** Настройки плагина из схемы `settings` в manifest.json. */
   settings: DzgSettings;
 
   ui: DzgUi;

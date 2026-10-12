@@ -1,0 +1,12 @@
+{
+  "id": "chat-tools",
+  "name": "Chat Tools",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Пример модулей chats и users: /unread, /readall, /whois, /typing, пункт «Кто это?» и уведомления о том, что люди появились в сети.",
+  "main": "main.js",
+  "settings": [
+    { "key": "watch", "type": "string", "title": "Следить за входом в сеть (юзернеймы через запятую)", "default": "" },
+    { "key": "typingToasts", "type": "bool", "title": "Тост, когда кто-то записывает голосовое", "default": false }
+  ]
+}

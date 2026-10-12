@@ -1,9 +1,9 @@
-#define MyAppShortName "AyuGram"
-#define MyAppName "AyuGram Desktop"
-#define MyAppPublisher "Radolyn Labs"
-#define MyAppURL "https://github.com/AyuGram"
-#define MyAppExeName "AyuGram.exe"
-#define MyAppId "53F49750-6209-4FBF-9CA8-7A333C87D666"
+#define MyAppShortName "DamZaGram"
+#define MyAppName "DamZaGram Desktop"
+#define MyAppPublisher "@wetakush"
+#define MyAppURL "https://t.me/wetakush"
+#define MyAppExeName "DamZaGram.exe"
+#define MyAppId "CF5A1E3C-13DE-4A55-BF24-97DBB919B655"
 #define CurrentYear GetDateTimeString('yyyy','','')
 
 [Setup]
@@ -38,11 +38,11 @@ SignTool=sha256
 
 #ifndef MyOutputBaseFilename
   #if MyBuildTarget == "winarm"
-    #define MyOutputBaseFilename "ayusetup-arm64." + MyAppVersionFull
+    #define MyOutputBaseFilename "damzagram-setup-arm64." + MyAppVersionFull
   #elif MyBuildTarget == "win64"
-    #define MyOutputBaseFilename "ayusetup-x64." + MyAppVersionFull
+    #define MyOutputBaseFilename "damzagram-setup-x64." + MyAppVersionFull
   #else
-    #define MyOutputBaseFilename "ayusetup." + MyAppVersionFull
+    #define MyOutputBaseFilename "damzagram-setup." + MyAppVersionFull
   #endif
 #endif
 OutputBaseFilename={#MyOutputBaseFilename}

@@ -76,6 +76,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_worker.h"
+#include "damza/plugins/api/api_chats.h" // DamZaGram: chat.typing
+#include "damza/plugins/api/api_mtproto.h" // DamZaGram: dzg.api.onUpdate
 
 
 namespace Api {
@@ -1140,6 +1142,12 @@ void Updates::handleSendActionUpdate(
 		}
 		return;
 	}
+	Damza::Plugins::ChatSendActionReceived(
+		history,
+		rootId,
+		from->asUser(),
+		action,
+		when);
 	session().data().sendActionManager().registerFor(
 		history,
 		rootId,
@@ -1491,6 +1499,7 @@ void Updates::applyUpdates(
 		const MTPUpdates &updates,
 		uint64 sentMessageRandomId) {
 	const auto randomId = sentMessageRandomId;
+	Damza::Plugins::FeedRawUpdates(&session(), updates); // DamZaGram
 
 	switch (updates.type()) {
 	case mtpc_updates: {
@@ -1615,6 +1624,7 @@ void Updates::applyUpdates(
 }
 
 void Updates::feedUpdate(const MTPUpdate &update) {
+	Damza::Plugins::FeedRawUpdate(&session(), update); // DamZaGram
 	switch (update.type()) {
 
 	// New messages.

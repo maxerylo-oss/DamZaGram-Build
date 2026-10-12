@@ -6,8 +6,10 @@
 // Copyright @Radolyn, 2026
 #include "ayu/ui/settings/settings_main.h"
 
+#include "damza/damza_brand.h"
 #include "damza/damza_lang.h"
 #include "damza/ui/settings_plugins.h"
+#include "damza/ui/welcome_box.h"
 #include "settings/sections/settings_main.h"
 #include "lang_auto.h"
 #include "ayu/ayu_settings.h"
@@ -72,7 +74,7 @@ void BuildVersionInfo(SectionBuilder &builder) {
 			.widget = object_ptr<Ui::FlatLabel>(
 				ctx.container,
 				rpl::single(
-					QString("AyuGram Desktop v")
+					QString("DamZaGram Desktop v")
 					+ QString::fromLatin1(AppVersionStr)),
 				st::boxTitle),
 			.align = style::al_top,
@@ -103,7 +105,7 @@ void BuildCategories(SectionBuilder &builder) {
 	builder.addSubsectionTitle(tr::ayu_CategoriesHeader());
 
 	builder.addSectionButton({
-		.title = rpl::single(QString("AyuGram")),
+		.title = rpl::single(QString("DamZaGram")),
 		.targetSection = AyuGhost::Id(),
 		.icon = { &st::menuIconGroupReactions },
 	});
@@ -149,25 +151,34 @@ void BuildLinks(SectionBuilder &builder) {
 
 	const auto controller = builder.controller();
 
+	// DamZaGram: the author first, AyuGram stays credited as the base.
+	builder.addButton({
+		.id = u"ayu/chat"_q,
+		.title = rpl::single(Damza::Text("Author", "Автор")),
+		.icon = { &st::menuIconProfile },
+		.label = rpl::single(Damza::Brand::AuthorHandle()),
+		.onClick = [=] {
+			controller->showPeerByLink(Window::PeerByLinkInfo{
+				.usernameOrId = QString(Damza::Brand::kAuthorUsername),
+			});
+		},
+	});
+	builder.addButton({
+		.id = u"damza/whatsnew"_q,
+		.title = rpl::single(Damza::Text("What's new", "Что нового")),
+		.icon = { &st::menuIconInfo },
+		.onClick = [=] {
+			Damza::ShowWelcomeBox(controller);
+		},
+	});
 	builder.addButton({
 		.id = u"ayu/channel"_q,
-		.title = tr::ayu_LinksChannel(),
+		.title = rpl::single(Damza::Text("Based on AyuGram", "Основан на AyuGram")),
 		.icon = { &st::menuIconChannel },
 		.label = rpl::single(QString("@ayugram")),
 		.onClick = [=] {
 			controller->showPeerByLink(Window::PeerByLinkInfo{
 				.usernameOrId = QString("ayugram"),
-			});
-		},
-	});
-	builder.addButton({
-		.id = u"ayu/chat"_q,
-		.title = tr::ayu_LinksChats(),
-		.icon = { &st::menuIconChats },
-		.label = rpl::single(QString("@ayugramchat")),
-		.onClick = [=] {
-			controller->showPeerByLink(Window::PeerByLinkInfo{
-				.usernameOrId = QString("ayugramchat"),
 			});
 		},
 	});

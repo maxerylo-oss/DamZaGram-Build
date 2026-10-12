@@ -105,6 +105,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/features/forward/ayu_forward.h"
+#include "damza/ui/welcome_box.h"
 
 
 namespace {
@@ -464,6 +465,8 @@ MainWidget::MainWidget(
 				.sessionWindow = weak,
 			}));
 	});
+
+	Damza::ShowWelcomeIfNeeded(controller); // DamZaGram
 }
 
 MainWidget::~MainWidget() {

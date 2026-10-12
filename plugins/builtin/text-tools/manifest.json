@@ -1,0 +1,13 @@
+{
+  "id": "text-tools",
+  "name": "Текстовые инструменты",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "builtin": true,
+  "description": "Калькулятор /calc, исправление раскладки «ghbdtn» → «привет» (/tr и меню сообщения), /upper /lower /mock /reverse /b64 /len /rand и автозамена :shrug: :lenny: :flip: перед отправкой.",
+  "settings": [
+    { "key": "replace", "type": "bool", "title": "Автозамена :shrug: :lenny: :flip: :unflip: :cool: при отправке", "default": true },
+    { "key": "autoLayout", "type": "bool", "title": "Сам исправлять сообщения, набранные не в той раскладке (экспериментально)", "default": false },
+    { "key": "toCompose", "type": "bool", "title": "Результат команд — в поле ввода, а не сразу в чат", "default": false }
+  ]
+}

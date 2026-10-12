@@ -144,6 +144,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_ai_compose_tones.h"
 #include "ayu/ayu_settings.h"
 #include "history/history_item_components.h"
+#include "damza/plugins/ui/ui_hooks.h"
 
 
 namespace HistoryView {
@@ -2741,6 +2742,7 @@ void ComposeControls::init() {
 	initSendAsFileButton();
 	initExpandButton();
 	initDiscardRichDraftButton();
+	if (_regularWindow) Damza::Plugins::RegisterComposeField(_wrap.get(), _field, [=] { return _history ? _history->peer.get() : nullptr; }, [=] { updateControlsGeometry(_wrap->size()); }); // DamZaGram
 	initWriteRestriction();
 	initVoiceRecordBar();
 	initKeyHandler();
@@ -4996,7 +4998,8 @@ void ComposeControls::updateControlsGeometry(QSize size) {
 			: 0)
 		- (_starsReaction
 			? (_st.starsSkip + _starsReaction->width())
-			: 0);
+			: 0)
+		- Damza::Plugins::ComposeButtonsWidth(_wrap.get(), !_field->isHidden()); // DamZaGram
 	{
 		_field->resizeToWidth(fieldWidth);
 		if (_richDraftPreview) {
@@ -5117,6 +5120,7 @@ void ComposeControls::updateControlsGeometry(QSize size) {
 			right += _scheduled->width();
 		}
 	}
+	right += Damza::Plugins::PlaceComposeButtons(_wrap.get(), right, buttonsTop, !_field->isHidden()); // DamZaGram
 	if (_ttlInfo && settings.showAutoDeleteButtonInMessageField()) {
 		_ttlInfo->move(size.width() - right - _ttlInfo->width(), buttonsTop);
 	}

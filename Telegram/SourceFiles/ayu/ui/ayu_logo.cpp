@@ -71,11 +71,13 @@ QImage CreateImage(const QString &name, const QSize resultImageSize, const int p
 	{
 		auto p = QPainter(&image);
 
+		// DamZaGram: the default logo is a rounded square, not a circle.
+		const auto ratio = (name == DEFAULT_ICON) ? (116. / 512.) : 0.5;
 		QPainterPath path;
 		path.addRoundedRect(
 			QRect(padding, padding, iconSize.width(), iconSize.height()),
-			iconSize.width() / 2.0f,
-			iconSize.height() / 2.0f
+			iconSize.width() * ratio,
+			iconSize.height() * ratio
 		);
 
 		p.save();

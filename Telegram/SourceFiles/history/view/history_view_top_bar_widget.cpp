@@ -79,6 +79,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/admin_log/history_admin_log_section.h"
 #include "styles/style_ayu_styles.h"
 #include "styles/style_ayu_icons.h"
+#include "damza/plugins/ui/ui_hooks.h"
 
 
 namespace HistoryView {
@@ -1337,6 +1338,7 @@ void TopBarWidget::updateControlsGeometry() {
 	if (!_admins->isHidden()) {
 		_rightTaken += _admins->width();
 	}
+	_rightTaken += Damza::Plugins::PlaceTopBarButtons(this, _rightTaken, otherButtonsTop); // DamZaGram
 
 	_search->moveToRight(_rightTaken, otherButtonsTop);
 	if (!_search->isHidden()) {
@@ -1525,6 +1527,7 @@ void TopBarWidget::updateControlsVisibility() {
 		&& groupCallsEnabled
 		&& !_chooseForReportReason);
 
+	Damza::Plugins::UpdateTopBarButtons(this, (_chooseForReportReason || section == Section::ChatsList) ? nullptr : _activeChat.key.peer()); // DamZaGram
 	if (_membersShowArea) {
 		_membersShowArea->setVisible(!_chooseForReportReason);
 	}

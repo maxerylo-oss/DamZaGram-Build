@@ -87,6 +87,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_ayu_icons.h"
 #include "lang_auto.h"
 #include "ayu/ui/settings/settings_main.h"
+#include "damza/ui/plugin_boxes.h"
+#include "damza/plugins/ui/ui_hooks.h"
 #include "styles/style_info.h"
 
 
@@ -392,8 +394,8 @@ MainMenu::MainMenu(
 	parentResized();
 
 	_telegram->setMarkedText(tr::link(
-		u"AyuGram Desktop"_q,
-		u"https://ayugram.one"_q));
+		u"DamZaGram Desktop"_q,
+		u"https://t.me/wetakush"_q));
 	_telegram->setLinksTrusted();
 	// The canary version is too long for the "Version {version}" form.
 	_version->setMarkedText(
@@ -845,6 +847,7 @@ void MainMenu::setupMenu() {
 	)->setClickedCallback([=] {
 		controller->showSettings();
 	});
+	Damza::PluginsUi::AddMainMenuEntry(_menu, controller); // DamZaGram
 
 	if (settings.showNightModeToggleInDrawer()) {
 
@@ -924,6 +927,7 @@ void MainMenu::setupMenu() {
 			},
 			streamerModeToggle->lifetime());
 	}
+	Damza::Plugins::FillMainMenu(_menu, _controller); // DamZaGram
 }
 
 void MainMenu::resizeEvent(QResizeEvent *e) {

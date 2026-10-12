@@ -3,9 +3,14 @@
 #pragma once
 
 #include "data/data_peer_id.h"
+#include "ui/text/text_entity.h"
 
 class HistoryItem;
 class PeerData;
+
+namespace Data {
+struct ReactionId;
+} // namespace Data
 
 namespace Main {
 class Session;
@@ -28,5 +33,10 @@ namespace Damza::Plugins {
 
 [[nodiscard]] QVariantMap SerializePeer(not_null<PeerData*> peer);
 [[nodiscard]] QVariantMap SerializeMessage(not_null<HistoryItem*> item);
+
+// Entity type names shared with JS: 'bold', 'textLink', 'pre', ...
+[[nodiscard]] QString EntityTypeName(EntityType type);
+[[nodiscard]] QVariantList SerializeEntities(const EntitiesInText &entities);
+[[nodiscard]] QString SerializeReactionId(const Data::ReactionId &id);
 
 } // namespace Damza::Plugins

@@ -47,9 +47,9 @@ void processIcon(QString shortcut, QString iconPath) {
 
 void processLegacy(const QString &iconPath) {
 	const auto appdata = QDir::fromNativeSeparators(qgetenv("APPDATA"));
-	auto shortcut = appdata + "/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/AyuGram Desktop.lnk";
+	auto shortcut = appdata + "/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/DamZaGram Desktop.lnk";
 	if (!QFile::exists(shortcut)) {
-		shortcut = appdata + "/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/AyuGram.lnk";
+		shortcut = appdata + "/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/DamZaGram.lnk";
 	}
 	if (!QFile::exists(shortcut)) {
 		return;
@@ -140,9 +140,9 @@ void processNewShortcuts(const QString &iconPath) {
 	}
 
 	const auto shortcuts = {
-		path + u"AyuGram Desktop/AyuGram.lnk"_q,
-		path + u"AyuGram/AyuGram.lnk"_q,
-		path + u"AyuGram.lnk"_q,
+		path + u"DamZaGram Desktop/DamZaGram.lnk"_q,
+		path + u"DamZaGram/DamZaGram.lnk"_q,
+		path + u"DamZaGram.lnk"_q,
 	};
 	for (const auto &shortcut : shortcuts) {
 		const auto native = QDir::toNativeSeparators(shortcut).toStdWString();
