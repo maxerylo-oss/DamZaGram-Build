@@ -1,0 +1,12 @@
+{
+  "id": "popup-text",
+  "name": "Окно с текстом",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Кнопка в шапке чата и пункт главного меню, которые показывают всплывающее окно с заданным текстом.",
+  "settings": [
+    { "key": "title", "type": "string", "title": "Заголовок окна", "default": "DamZaGram" },
+    { "key": "text", "type": "text", "title": "Текст окна", "default": "Привет! Это окно из плагина." },
+    { "key": "buttonText", "type": "string", "title": "Подпись кнопки в шапке чата", "default": "Текст" }
+  ]
+}
