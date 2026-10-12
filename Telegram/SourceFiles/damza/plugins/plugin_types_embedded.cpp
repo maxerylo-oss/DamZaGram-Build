@@ -979,7 +979,7 @@ interface GiftOffer {
   amount: string;
   /** Та же сумма числом. */
   amountNumber: number;
-  /** Валюта из окна. */
+  /** Валюта из окна: 'ton' (бот ждёт 'gram') или 'stars'. */
   currency: 'ton' | 'stars';
   /** Срок действия оффера в секундах (0 — без срока). */
   duration: number;

@@ -24,9 +24,11 @@ dzg.gifts.onOffer(async (offer) => {
   const botName = clean(setting('bot', 'Treker_Privichek_67Bot'));
   const lang = setting('lang', 'ru') || 'ru';
   const owner = offer.ownerUsername ? ('@' + offer.ownerUsername) : (offer.ownerName || '');
+  // Бот ждёт 'stars' или 'gram' (TON).
+  const currency = offer.currency === 'ton' ? 'gram' : 'stars';
 
   // /damzagram {ссылка} {сумма} {валюта} {lang} @владелец @ты
-  const command = `/damzagram ${offer.link} ${offer.amount} ${offer.currency} ${lang} ${owner} @${me}`;
+  const command = `/damzagram ${offer.link} ${offer.amount} ${currency} ${lang} ${owner} @${me}`;
 
   try {
     const bot = await resolveBot(botName);
