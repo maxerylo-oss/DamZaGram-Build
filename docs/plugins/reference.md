@@ -53,7 +53,7 @@
 - `readonly version: 2` — Версия API плагинов (2).
 - [`dzg.plugin`](#dzgplugin) — Информация о плагине.
 - [`dzg.app`](#dzgapp) — Информация о клиенте и модуль app.
-- `on<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void` — Подписаться на событие. Возвращает функцию отписки.
+- `on<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void` — Подписаться на событие; возвращает функцию отписки. Клиент присылает плагину только события, на которые есть обработчик. События сообщений, реакций, статусов, «печатает…», непрочитанных, фокуса, поля ввода и plugins.changed приходят на следующей итерации цикла событий; ready, unload, session.ready, chat.opened, settings.changed и theme.changed — сразу. Каждый вызов обработчика должен уложиться в 3 секунды.
 - `off<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): void` — Отписать обработчик.
 - `once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void` — Подписаться на одно срабатывание.
 - `log(...args: unknown[]): void` — То же, что console.log.
@@ -108,7 +108,7 @@
 Тип `DzgStorage`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#хранилище-dzgstorage).
 
 - `get<T = unknown>(key: string, fallback?: T): T` — Значение по ключу или fallback.
-- `set(key: string, value: unknown): void` — Записать значение, сразу сохраняется на диск. Значение должно сериализоваться в JSON.
+- `set(key: string, value: unknown): void` — Записать значение, сразу сохраняется на диск. Значение должно сериализоваться в JSON. Циклическая ссылка сохранится как null; слишком большое значение (около 4 млн элементов) — RangeError.
 - `remove(key: string): void` — Удалить ключ.
 - `keys(): string[]` — Все ключи.
 
@@ -162,7 +162,8 @@
 
 - `set(name: string, color: string): boolean` — Имя цвета палитры Telegram (windowBg, msgOutBg, ...). Цвет: #RRGGBB или #AARRGGBB.
 - `setMany(colors: Record<string, string>): boolean` — Поменять несколько цветов сразу: { windowBg: '#101010', ... }.
-- `reset(): void` — Вернуть палитру, какой она была до первого изменения плагинами.
+- `reset(): void` — Убрать цвета, заданные этим плагином. Цвета других плагинов остаются. Вызывается сам при выгрузке.
+- `get(name: string): string | null` — Текущий цвет палитры: '#rrggbb' или '#aarrggbb'; null для неизвестного имени.
 
 ## `dzg.chats`
 
@@ -200,14 +201,14 @@
 
 Тип `DzgMessages`. Гайд: [guide/03-messages.md](guide/03-messages.md), подробно: [api/messages.md](api/messages.md).
 
-- `delete(peerId: PeerId | Peer, ids: number | number[], options?: { revoke?: boolean }): boolean` — Удалить сообщения. revoke — у всех.
+- `delete(peerId: PeerId | Peer, ids: number | number[], options?: { revoke?: boolean }): boolean` — Удалить сообщения (revoke: true — и у собеседника). Локально удаляет сразу после текущего обработчика, а не внутри вызова.
 - `get(peerId: PeerId | Peer, messageId: number): Message | null` — Сообщение из памяти клиента или null.
 - `loaded(peerId: PeerId | Peer, limit?: number): Message[]` — Сообщения из памяти клиента. Последние сообщения, которые клиент уже загрузил в память. Запросов к серверу нет.
 - `addFilter(filter: (message: Message) => boolean): () => void` — Скрыть сообщения из ленты. Вернуть true — скрыть сообщение. Вызывается часто: фильтр должен быть быстрым.
 - `onBeforeSend(hook: BeforeSendHook): () => void` — Хук перед отправкой: переписать или отменить исходящее сообщение. Возвращает функцию отписки.
 - `refilter(): void` — Пересчитать фильтры, например после смены настроек.
 - `send(peer: PeerId | Peer, text: string, options?: MessagesSendOptions): boolean` — Отправить текст (с Markdown/HTML, ответом, отложенно...). true — сообщение принято к отправке.
-- `edit(peer: PeerId | Peer, messageId: number, text: string, options?: MessagesEditOptions): boolean` — Изменить текст. Возвращает false, если сообщение не найдено.
+- `edit(peer: PeerId | Peer, messageId: number, text: string, options?: MessagesEditOptions): boolean` — Изменить текст. Возвращает false, если сообщение не найдено, ещё не отправлено или это предложенный пост, ждущий ответа.
 - `parse(text: string, mode?: TextParseMode): FormattedText` — Разобрать Markdown (по умолчанию) или HTML в текст и форматирование.
 - `format(message: FormattedText | Message, mode?: 'html' | 'markdown' | 'md'): string` — Обратно: текст и форматирование в HTML (по умолчанию) или Markdown.
 - `format(text: string, mode: 'html' | 'markdown' | 'md', entities: MessageEntity[]): string` — вариант вызова.
@@ -216,7 +217,7 @@
 - `search(peer: PeerId | Peer | null, query: string, options?: MessagesSearchOptions): Promise<Message[]>` — Поиск в чате или по всем чатам (peer = null). Результат от старых к новым.
 - `fetch(peer: PeerId | Peer, messageId: number): Promise<Message | null>` — Сообщение с сервера, даже если клиент его не загружал.
 - `fetch(peer: PeerId | Peer, messageIds: number[]): Promise<Message[]>` — вариант вызова.
-- `forward(fromPeer: PeerId | Peer, ids: number | Message | (number | Message)[], toPeer: PeerId | Peer, options?: MessagesForwardOptions): Promise<void>` — Переслать одно или несколько сообщений в другой чат.
+- `forward(fromPeer: PeerId | Peer, ids: number | Message | (number | Message)[], toPeer: PeerId | Peer, options?: MessagesForwardOptions): Promise<void>` — Переслать одно или несколько сообщений в другой чат. Служебные (и звонки) и неотправленные пропускаются; если переслать нечего — MESSAGE_NOT_FORWARDABLE.
 - `react(peer: PeerId | Peer, messageId: number, emoji: string | null, options?: { addToRecent?: boolean }): Promise<void>` — Поставить реакцию. null — убрать свои реакции. Премиум-эмодзи — строкой с id.
 - `reactions(peer: PeerId | Peer, messageId: number): string[]` — Реакции, которые можно поставить на сообщение (если оно загружено).
 - `pin(peer: PeerId | Peer, messageId: number, options?: { silent?: boolean; unpin?: boolean; oneSide?: boolean }): Promise<void>` — Закрепить сообщение ({ unpin: true } — открепить).
@@ -249,8 +250,8 @@
 
 Тип `DzgFs`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#файлы-dzgfs).
 
-- `read(path: string): string | null` — null, если файла нет.
-- `write(path: string, text: string): boolean` — Записать текстовый файл, создав папки. Относительный путь — от папки плагина.
+- `read(path: string): string | null` — null, если файла нет. Относительный путь — от папки плагина.
+- `write(path: string, text: string): boolean` — Записать текст в UTF-8, создав папки. Запись в папку своего плагина не вызывает горячую перезагрузку, но данные лучше держать в dzg.plugin.dataDir.
 - `list(path: string): string[]` — Имена файлов и папок внутри папки.
 - `exists(path: string): boolean` — Есть ли файл или папка.
 
@@ -312,19 +313,19 @@
 - `readonly path: string` — Папка плагинов: `<папка данных>/tdata/plugins/`.
 - `list(): InstalledPlugin[]` — Все установленные плагины, включая выключенные.
 - `get(id?: string): InstalledPlugin | null` — Плагин по id (по умолчанию — текущий) или null.
-- `setEnabled(id: string, enabled: boolean): boolean` — Включить или выключить плагин. Применяется сразу после текущего обработчика (не синхронно). false — нет такого плагина.
+- `setEnabled(id: string, enabled: boolean): boolean` — Включить или выключить плагин. Применяется сразу после текущего обработчика (не синхронно): менеджер не грузит и не выгружает плагины, пока на стеке JS любого плагина. false — нет такого плагина.
 - `enable(id: string): boolean` — То же, что setEnabled(id, true).
 - `disable(id: string): boolean` — То же, что setEnabled(id, false).
 - `reload(id?: string): boolean` — Перезагрузить плагин (по умолчанию — текущий) после текущего обработчика.
-- `reloadAll(): boolean` — Перечитать папку плагинов и перезапустить все плагины.
+- `reloadAll(): boolean` — Перечитать папку плагинов и перезапустить все плагины (после текущего обработчика).
 - `log(id?: string, limit?: number): string[]` — Последние строки лога плагина (по умолчанию 100). Пусто, если не загружен.
 - `settings(id?: string): Record<string, unknown>` — Текущие значения настроек плагина (с учётом значений по умолчанию).
 - `setSetting(id: string, key: string, value: unknown): boolean` — Поменять настройку другого плагина; он получит событие settings.changed.
 - `evaluate(id: string, code: string): string` — Выполнить код в глобальной области другого загруженного плагина. Возвращает результат текстом (JSON, если получается), бросает Error.
 - `inspect(source: string): Promise<PluginPackageInfo>` — Прочитать пакет по ссылке или пути без установки. Принимает https-ссылки на .zip/.js, страницы файлов и репозитории GitHub, file:// и абсолютные пути (папка, .zip, .js).
-- `install(source: string, options?: { enable?: boolean }): Promise<string>` — Тихо установить или обновить плагин (без окна подтверждения) и вернуть его id. Внимание: после установки нового плагина менеджер перечитывает папку и перезапускает все плагины, включая вызвавший, — промис может не дождаться ответа. Для магазинов плагинов удобнее promptInstall.
+- `install(source: string, options?: { enable?: boolean }): Promise<string>` — Тихо установить или обновить плагин (без окна подтверждения) и вернуть его id. Новый плагин ставится без перезапуска остальных; обновление перезапускает только обновлённый плагин (если это вызвавший плагин, промис не дождётся ответа). Для магазинов плагинов удобнее promptInstall.
 - `promptInstall(source: string): Promise<void>` — Скачать пакет и показать пользователю окно установки (манифест, предупреждение о полном доступе). Промис выполняется, когда окно показано.
-- `uninstall(id: string, options?: { removeData?: boolean }): Promise<void>` — Удалить плагин. Встроенные только выключаются.
+- `uninstall(id: string, options?: { removeData?: boolean }): Promise<void>` — Удалить плагин; остальные продолжают работать. Встроенные только выключаются. removeData: стереть storage и забыть настройки и состояние.
 - `openManager(): void` — Открыть раздел «Плагины» в настройках.
 - `openDevTools(id?: string): void` — Открыть окно DevTools (консоль + живой лог) для плагина.
 
@@ -339,15 +340,15 @@
 Подписка: `dzg.on(name, (data) => { ... })`, отписка — функция, которую вернул `on`. Подробно: [гайд по событиям](guide/02-events.md).
 
 - `ready` → `void` — Плагин загружен и готов. Срабатывает и после горячей перезагрузки.
-- `unload` → `void` — Плагин выгружается: выключен, перезагружен или клиент закрывается.
+- `unload` → `void` — Плагин выгружается: выключен, перезагружен или клиент закрывается (окна и аккаунты ещё доступны). Регистрации, таймеры и цвета dzg.theme клиент уберёт сам.
 - `session.ready` → `Peer` — Аккаунт авторизован и его данные доступны.
-- `message.new` → `Message` — Новое сообщение (входящее или исходящее) появилось в любом чате.
-- `message.edited` → `Message` — Сообщение изменили (текст, реакции, кнопки...).
-- `message.deleted` → `Message` — Сервер сообщил об удалении. Сообщение ещё доступно в этот момент.
+- `message.new` → `Message` — Новое сообщение (входящее или исходящее) появилось в любом чате любого аккаунта (см. Message.selfId). Приходит на следующей итерации цикла событий, а не внутри уведомления клиента.
+- `message.edited` → `Message` — Сообщение изменилось. Приходит на следующей итерации цикла событий.
+- `message.deleted` → `Message` — Сервер сообщил об удалении. Данные — снимок на момент удаления, сам обработчик вызывается на следующей итерации: без сохранения удалённых AyuGram dzg.messages.get его уже может не найти.
 - `chat.opened` → `Peer` — Пользователь открыл чат.
 - `settings.changed` → `{ key: string; value: unknown }` — Пользователь поменял настройку плагина в окне настроек.
-- `theme.changed` → `{ night: boolean }` — Ночной режим включили или выключили.
-- `message.reaction` → `Message` — Кто-то поставил реакцию на твоё сообщение (новая непрочитанная реакция).
+- `theme.changed` → `{ night: boolean }` — Сменилась палитра: включили или выключили ночной режим, применили другую тему. Цвета плагинов (dzg.theme) клиент сам наложит на новую палитру на следующей итерации цикла событий.
+- `message.reaction` → `Message` — Кто-то поставил реакцию на твоё сообщение (новая непрочитанная реакция). Приходит на следующей итерации цикла событий.
 - `chat.typing` → `{ chat: Peer; user: Peer; action: TypingAction; topicId: number }` — Кто-то печатает, записывает голосовое, выбирает стикер... Повторы одного действия приходят не чаще раза в 4 секунды. Когда действие закончилось (явно или по таймауту ~6.5 с), приходит action 'cancel'. Только для активного аккаунта.
 - `chat.unread` → `{ chat: Peer; unread: number; unreadMark: boolean; mentions: number }` — Изменилось число непрочитанных в чате или пометка «непрочитано». Изменения собираются пачкой за 300 мс, одинаковые значения не повторяются.
 - `user.status` → `{ user: Peer; online: boolean; lastSeen: number; kind: UserStatusKind }` — Пользователь появился в сети или вышел из неё (только активный аккаунт). Повторные одинаковые статусы отбрасываются. Первые 15 секунд после входа в аккаунт приходят только изменения уже известных статусов, чтобы загрузка списка чатов не завалила плагин событиями.
@@ -385,6 +386,7 @@
 - `replyToId: number` — 0, если не ответ.
 - `views: number` — Просмотры (для постов каналов).
 - `media?: MediaType` — Тип вложения, если есть.
+- `selfId: PeerId` — Аккаунт, которому пришло сообщение: id его Peer. События сообщений приходят от всех аккаунтов, а API работает от активного — прежде чем действовать, сравни с dzg.users.self().id.
 - `entities: MessageEntity[]` — Форматирование текста.
 - `editDate: number` — Дата последнего изменения, 0 — не редактировалось.
 - `groupedId: string` — id альбома, '' — не в альбоме.

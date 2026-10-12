@@ -1,0 +1,84 @@
+{
+  "id": "chat-export",
+  "name": "Экспорт чата",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "builtin": true,
+  "description": "📤 История чата в файл: красивая HTML-страница, Markdown-расшифровка или JSON. Пункт меню чата «Экспорт чата…» и /export html 1000. Прогресс со скоростью и ETA, отмена, период по датам.",
+  "settings": [
+    {
+      "key": "format",
+      "type": "select",
+      "title": "Формат по умолчанию",
+      "default": "html",
+      "options": [
+        { "value": "html", "title": "HTML" },
+        { "value": "md", "title": "Markdown" },
+        { "value": "json", "title": "JSON" }
+      ]
+    },
+    {
+      "key": "count",
+      "type": "select",
+      "title": "Сколько сообщений по умолчанию",
+      "default": "1000",
+      "options": [
+        { "value": "100", "title": "100" },
+        { "value": "1000", "title": "1 000" },
+        { "value": "10000", "title": "10 000" },
+        { "value": "all", "title": "Все" }
+      ]
+    },
+    {
+      "key": "includeService",
+      "type": "bool",
+      "title": "Включать служебные сообщения",
+      "default": false,
+      "description": "«Вступил в группу», «закрепил сообщение» и т. п."
+    },
+    {
+      "key": "messageLinks",
+      "type": "bool",
+      "title": "Ссылки t.me на сообщения в группах и каналах",
+      "default": true,
+      "description": "Время у сообщения в HTML и Markdown становится ссылкой на него."
+    },
+    {
+      "key": "htmlTheme",
+      "type": "select",
+      "title": "Тема HTML-страницы",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "title": "Как в системе" },
+        { "value": "light", "title": "Светлая" },
+        { "value": "dark", "title": "Тёмная" }
+      ]
+    },
+    {
+      "key": "maxMessages",
+      "type": "number",
+      "title": "Максимум сообщений за один экспорт",
+      "default": 100000,
+      "min": 1000,
+      "max": 1000000,
+      "integer": true,
+      "description": "Предел для «все». Очень длинную историю удобнее выгружать по периодам."
+    },
+    {
+      "key": "pageDelay",
+      "type": "number",
+      "title": "Пауза между страницами истории, мс",
+      "default": 150,
+      "min": 0,
+      "max": 5000,
+      "integer": true,
+      "description": "Страница — 100 сообщений. Пауза бережёт от ограничений Telegram (FLOOD_WAIT)."
+    },
+    {
+      "key": "openAfter",
+      "type": "bool",
+      "title": "Открывать файл сразу после экспорта",
+      "default": false
+    }
+  ]
+}

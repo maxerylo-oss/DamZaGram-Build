@@ -1,0 +1,51 @@
+{
+  "id": "automations",
+  "name": "Автоматизации",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "builtin": true,
+  "description": "Правила «если → то» без кода: новое сообщение, расписание или открытие чата → уведомление, ответ, реакция, пересылка, Избранное, прочитать, без звука, webhook. Лимиты, защита от петель, пробный режим. /auto — правила, /auto off — остановить всё.",
+  "settings": [
+    {
+      "key": "enabled",
+      "type": "bool",
+      "title": "Автоматизации работают",
+      "default": true,
+      "description": "Общий выключатель всех правил. То же самое — /auto off и /auto on."
+    },
+    {
+      "key": "defaultLimit",
+      "type": "number",
+      "title": "Лимит нового правила: срабатываний в минуту",
+      "default": 5,
+      "min": 1,
+      "max": 60,
+      "integer": true,
+      "description": "У каждого правила свой лимит, это значение подставляется в редакторе."
+    },
+    {
+      "key": "globalLimit",
+      "type": "number",
+      "title": "Всего срабатываний в минуту на все правила",
+      "default": 30,
+      "min": 1,
+      "max": 300,
+      "integer": true
+    },
+    {
+      "key": "silent",
+      "type": "bool",
+      "title": "Уведомления правил без звука",
+      "default": false
+    },
+    {
+      "key": "logSize",
+      "type": "number",
+      "title": "Сколько записей хранить в журнале",
+      "default": 200,
+      "min": 20,
+      "max": 2000,
+      "integer": true
+    }
+  ]
+}

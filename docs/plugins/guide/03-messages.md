@@ -15,6 +15,7 @@ const message = {
   fromId: '…', fromName: 'Паша', text: 'привет **мир**', date: 1760252400,
   out: false, service: false, post: false, pinned: false, deleted: false,
   replyToId: 0, views: 0, media: 'photo',
+  selfId: '…',                        // аккаунт, которому пришло сообщение
   entities: [{ type: 'bold', offset: 7, length: 3 }],
   editDate: 0, groupedId: '', topicId: undefined,
   forwardFrom: undefined,             // есть у пересланных
@@ -28,6 +29,9 @@ const message = {
   UTF-16, как `String.length`).
 - `date` и `editDate` — unix time в **секундах**: `new Date(m.date * 1000)`.
 - `out` — твоё сообщение, `service` — сервисное, `post` — пост канала.
+- `selfId` — id аккаунта, которому принадлежит сообщение. Если в клиенте
+  несколько аккаунтов, сравни его с `dzg.users.self().id`, прежде чем
+  отвечать: API работает от активного аккаунта.
 - `media` — тип вложения: `photo`, `video`, `gif`, `sticker`, `voice`,
   `videoNote`, `audio`, `file`, `poll`, `other`.
 
@@ -133,7 +137,9 @@ dzg.messages.delete(chat, id, { revoke: true });     // у всех
 
 `edit` и `delete` синхронно возвращают `true`, если запрос ушёл. Если сервер
 отказал (например, `MESSAGE_EDIT_TIME_EXPIRED`), ошибка пишется в лог
-плагина.
+плагина. У себя `delete` убирает сообщения не внутри вызова, а сразу после
+того, как твой код вернёт управление клиенту, поэтому его можно вызывать
+и из обработчика `message.new`.
 
 ## Пересылка, реакции, закрепление
 

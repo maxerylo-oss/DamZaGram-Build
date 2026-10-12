@@ -556,9 +556,33 @@ void SidePanelHost::refreshTabs() {
 			active = i;
 		}
 	}
-	_tabs->setSections(titles);
-	_tabs->setActiveSectionFast(active);
+	_tabTitles = std::move(titles);
+	_tabTitlesShown.clear();
+	_tabActive = active;
 	updateInnerGeometry();
+}
+
+void SidePanelHost::applyTabTitles(int width) {
+	if (!_tabs || _tabTitles.empty()) {
+		return;
+	}
+	// Tabs share the width equally: elide titles so they never overlap.
+	const auto &st = st::defaultTabsSlider;
+	const auto count = int(_tabTitles.size());
+	const auto available = std::max(
+		width / count - 2 * st.strictSkip - st::lineWidth * 4,
+		st.labelStyle.font->width(u"W…"_q));
+	auto shown = std::vector<QString>();
+	shown.reserve(count);
+	for (const auto &title : _tabTitles) {
+		shown.push_back(st.labelStyle.font->elided(title, available));
+	}
+	if (shown == _tabTitlesShown) {
+		return;
+	}
+	_tabTitlesShown = shown;
+	_tabs->setSections(shown);
+	_tabs->setActiveSectionFast(_tabActive);
 }
 
 void SidePanelHost::updateInnerGeometry() {
@@ -566,6 +590,7 @@ void SidePanelHost::updateInnerGeometry() {
 	const auto inner = std::max(width() - left, 0);
 	auto top = 0;
 	if (_tabs) {
+		applyTabTitles(inner);
 		_tabs->resizeToWidth(inner);
 		_tabs->moveToLeft(left, 0);
 		top += _tabs->height();

@@ -15,6 +15,25 @@ by [**@wetakush**](https://t.me/wetakush)
 
 </div>
 
+## Screenshots
+
+<table>
+<tr>
+<td align="center"><img src="docs/assets/screenshots/welcome.png" width="240" alt="Welcome"><br><sub>Welcome</sub></td>
+<td align="center"><img src="docs/assets/screenshots/plugins-manager.png" width="240" alt="Plugin manager"><br><sub>Plugin manager</sub></td>
+<td align="center"><img src="docs/assets/screenshots/command-palette.png" width="240" alt="Command palette"><br><sub>Command palette</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/assets/screenshots/automations.png" width="240" alt="Automations"><br><sub>Automations</sub></td>
+<td align="center"><img src="docs/assets/screenshots/quick-replies.png" width="240" alt="Quick replies"><br><sub>Quick replies</sub></td>
+<td align="center"><img src="docs/assets/screenshots/theme-panel.png" width="240" alt="DamZaGram theme"><br><sub>DamZaGram theme</sub></td>
+</tr>
+</table>
+
+<p align="center"><img src="docs/assets/screenshots/devtools.png" width="720" alt="DevTools console"><br><sub>DevTools console</sub></p>
+
+Shot from a live build: plugin panels dock to the right of the chat.
+
 ## Features
 
 ### Everything from AyuGram
@@ -48,20 +67,41 @@ Full documentation: [`docs/plugins`](docs/plugins).
 
 ### Built-in plugins
 
-Shipped with the client and enabled in one click (Settings → DamZaGram Preferences → Plugins):
+Fourteen plugins ship with the client. All of them except Auto-reply are on from the first start; turn any of them
+on or off and configure it in Settings → DamZaGram Preferences → Plugins (or press `Ctrl+Shift+P` outside a text field).
 
 | Plugin | What it does |
 |---|---|
 | Command palette | `Ctrl+Shift+K`: fuzzy search over chats, plugin commands and client actions |
+| AI digest | "What did I miss": Claude summarizes the latest messages of a chat (`/digest`, needs an Anthropic API key) |
 | Deleted messages | Tells you who deleted what and where; journal of deleted messages |
-| Keyword alerts | Notifies when a word or `/regex/` appears in any chat |
 | Reminders | `/remind 10m buy bread`, `/remind 18:30 call`, "Remind me…" in the message menu |
-| Auto-reply | "Away" mode for private chats |
 | Chat stats | Who writes the most, active hours and days, top words and emoji |
+| Keyword alerts | Notifies when a word or `/regex/` appears in any chat |
+| Auto-reply | "Away" mode for private chats (off by default) |
 | Text tools | `/calc`, wrong-layout fix ("ghbdtn" → "привет"), `/upper` `/mock` `/b64`…, `:shrug:` auto-replace |
-| AI digest | "What did I miss": a summary of the latest messages of a chat |
+| Anti-ads | Hides ad posts (`erid:`, "Реклама", `#ad`…) in channels, `/antiads` |
+| DamZaGram theme | Monolith / Glass / Rail accent presets on top of any theme, `/theme` |
+| Automations | No-code "if → then" rules: a new message, a schedule or an opened chat → notify, reply, react, forward, save, mark read, mute, webhook; rate limits and a loop guard, `/auto` |
+| Quick replies | Text snippets with variables (`{first}`, `{date}`, `{?question}`): a button by the message field, `/q name`, `;;shortcut` |
+| Bookmarks | Bookmark any message with a note and tags; search panel `/bm`, top-bar button, Markdown export |
+| Chat export | A chat's history as a self-contained HTML page, Markdown or JSON, with progress and date ranges, `/export` |
 
 The source of each one lives in [`plugins/builtin`](plugins/builtin) — a good place to learn the API.
+What each plugin does in detail: [`docs/plugins/builtins.md`](docs/plugins/builtins.md).
+
+### What's new
+
+- Four new built-in plugins: Automations, Quick replies, Bookmarks and Chat export.
+- Plugin events such as `message.new` arrive on the next event-loop iteration instead of inside the client's own
+  notifications, and only plugins that subscribed to an event receive it. Messages carry `selfId`, the account that
+  received them.
+- Theme colors are layered per plugin: `dzg.theme.reset()` removes only your own colors, plugin colors come back by
+  themselves after a theme or night-mode switch, and `dzg.theme.get()` reads a color.
+- Installing or removing a plugin no longer restarts the others, and a plugin's own `dzg.fs.write` into its folder no
+  longer triggers hot reload.
+- `Ctrl+Shift+P` opens the plugin manager only outside text fields, so it still formats a spoiler in the message field.
+- Auto-update is off: DamZaGram has no update server of its own yet.
 
 ### Your first plugin in 30 seconds
 
@@ -165,6 +205,7 @@ Or install system-wide with `sudo cmake --install out`.
 
 - `tools/damza/check.py <file.cpp>` — syntax-only compile of a single file with the real flags, in seconds.
 - `tools/damza/sandbox.py <plugin/main.js> [test.js]` — runs a plugin against the real JS API in plain QuickJS with a mocked client.
+- `tools/damza/tests/builtins/run.py [id…]` — the tests of the built-in plugins, in the same sandbox.
 
 ## Credits
 

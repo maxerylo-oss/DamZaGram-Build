@@ -1,0 +1,62 @@
+{
+  "id": "bookmarks",
+  "name": "Закладки",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "builtin": true,
+  "description": "Любое сообщение — в закладки с заметкой и тегами: «В закладки» в меню сообщения, панель /bm с поиском, тегами и группировкой по чатам, кнопка в шапке чата, экспорт в Markdown. Удалённые сообщения остаются в закладках.",
+  "settings": [
+    {
+      "key": "askNote",
+      "type": "bool",
+      "title": "Спрашивать заметку и теги при добавлении",
+      "default": true,
+      "description": "Если выключить, сообщение попадает в закладки сразу, а заметку можно дописать потом"
+    },
+    {
+      "key": "groupByChat",
+      "type": "bool",
+      "title": "Группировать список по чатам",
+      "default": true
+    },
+    {
+      "key": "sortBy",
+      "type": "select",
+      "title": "Порядок в списке (новые сверху)",
+      "default": "added",
+      "options": [
+        { "value": "added", "title": "По времени добавления в закладки" },
+        { "value": "message", "title": "По дате самого сообщения" }
+      ]
+    },
+    {
+      "key": "pageSize",
+      "type": "number",
+      "title": "Сколько закладок показывать сразу",
+      "default": 30,
+      "min": 5,
+      "max": 200,
+      "integer": true,
+      "description": "Остальные открываются кнопкой «Показать ещё»"
+    },
+    {
+      "key": "topBarButton",
+      "type": "bool",
+      "title": "Кнопка в шапке чата, если в нём есть закладки",
+      "default": true
+    },
+    {
+      "key": "trackEdits",
+      "type": "bool",
+      "title": "Обновлять текст закладки, когда сообщение изменили",
+      "default": true,
+      "description": "Удалённые сообщения не трогаются: в закладке остаётся сохранённый текст"
+    },
+    {
+      "key": "openFolderAfterExport",
+      "type": "bool",
+      "title": "Открывать папку после экспорта в Markdown",
+      "default": false
+    }
+  ]
+}

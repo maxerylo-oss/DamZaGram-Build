@@ -28,7 +28,7 @@
 | 18 | [Отложить сообщение: /later](#отложить-сообщение-later) | `scheduleDate` |
 | 19 | [Топ авторов чата](#топ-авторов-чата) | `messages.history` |
 | 20 | [Ночной режим по расписанию](#ночной-режим-по-расписанию) | `app.setNightMode` |
-| 21 | [Свой акцентный цвет](#свой-акцентный-цвет) | `theme`, `theme.changed` |
+| 21 | [Свой акцентный цвет](#свой-акцентный-цвет) | `theme`, `settings.changed` |
 | 22 | [Кнопка «прочитать всё»](#кнопка-прочитать-всё) | `addTopBarButton`, `markRead` |
 | 23 | [Канал → Избранное по ключевым словам](#канал--избранное-по-ключевым-словам) | `message.new`, `forward` |
 | 24 | [Кто онлайн в группе](#кто-онлайн-в-группе) | `api.call` |
@@ -343,6 +343,7 @@ const HOUR = 3600 * 1000;
 dzg.on('message.new', (m) => {
   if (!dzg.settings.get('enabled')) return;
   if (m.out || m.service || m.chat.type !== 'user' || m.chat.isSelf) return;
+  if (m.selfId !== dzg.users.self()?.id) return; // ответ уйдёт от активного аккаунта
   const last = lastReply.get(m.peerId) || 0;
   if (Date.now() - last < HOUR) return;
   lastReply.set(m.peerId, Date.now());
@@ -360,6 +361,7 @@ dzg.commands.register('away', ({ args }) => {
 ```js
 dzg.on('message.new', (m) => {
   if (m.out || m.service || !/спасибо|благодарю|thank/iu.test(m.text)) return;
+  if (m.selfId !== dzg.users.self()?.id) return; // реакцию ставит активный аккаунт
   // Если в чате сердечко запрещено, промис отклонится с REACTION_INVALID
   dzg.messages.react(m.chat, m.id, '❤').catch((e) => console.warn('react:', e.message));
 });
@@ -570,8 +572,9 @@ dzg.on('settings.changed', check);
 
 ## Свой акцентный цвет
 
-Акцент из настроек красит кнопки, выделение и ссылки. После смены ночного
-режима клиент загружает другую палитру, поэтому цвета применяются заново.
+Акцент из настроек красит кнопки, выделение и ссылки. После смены темы
+или ночного режима клиент сам возвращает цвета плагина на новую палитру,
+а при выгрузке плагина убирает их.
 
 ```json
 "settings": [
@@ -595,8 +598,6 @@ function apply() {
 
 apply();
 dzg.on('settings.changed', ({ key }) => { if (key === 'accent') apply(); });
-dzg.on('theme.changed', apply);
-dzg.on('unload', () => dzg.theme.reset());
 ```
 
 ## Кнопка «прочитать всё»
@@ -635,7 +636,7 @@ dzg.on('message.new', async (m) => {
   const text = m.text.toLowerCase();
   if (!words.some((w) => text.includes(w))) return;
   const me = dzg.users.self();
-  if (!me) return;
+  if (!me || m.selfId !== me.id) return; // пост пришёл другому аккаунту
   try {
     await dzg.messages.forward(m.chat, m.id, me, { silent: true });
   } catch (e) {

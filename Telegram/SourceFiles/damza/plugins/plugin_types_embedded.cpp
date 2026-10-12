@@ -194,7 +194,11 @@ interface AppInfo {
 }
 
 interface EventMap {
-  /** Ночной режим включили или выключили. */
+  /**
+   * Сменилась палитра: включили или выключили ночной режим, применили другую
+   * тему. Цвета плагинов (dzg.theme) клиент сам наложит на новую палитру на
+   * следующей итерации цикла событий.
+   */
   'theme.changed': { night: boolean };
 }
 )DZG_TYPES",
@@ -543,6 +547,12 @@ interface Message {
   replyToId: number;
   views: number;
   media?: MediaType;
+  /**
+   * Аккаунт, которому пришло сообщение: id его Peer. События сообщений
+   * приходят от всех аккаунтов, а API работает от активного — прежде чем
+   * действовать, сравни с dzg.users.self().id.
+   */
+  selfId: PeerId;
 }
 
 interface PluginInfo {
@@ -570,14 +580,27 @@ interface AppInfo {
 interface EventMap {
   /** Плагин загружен и готов. Срабатывает и после горячей перезагрузки. */
   'ready': void;
-  /** Плагин выгружается: выключен, перезагружен или клиент закрывается. */
+  /**
+   * Плагин выгружается: выключен, перезагружен или клиент закрывается (окна
+   * и аккаунты ещё доступны). Регистрации, таймеры и цвета dzg.theme клиент
+   * уберёт сам.
+   */
   'unload': void;
   /** Аккаунт авторизован и его данные доступны. */
   'session.ready': Peer;
-  /** Новое сообщение (входящее или исходящее) появилось в любом чате. */
+  /**
+   * Новое сообщение (входящее или исходящее) появилось в любом чате любого
+   * аккаунта (см. Message.selfId). Приходит на следующей итерации цикла
+   * событий, а не внутри уведомления клиента.
+   */
   'message.new': Message;
+  /** Сообщение изменилось. Приходит на следующей итерации цикла событий. */
   'message.edited': Message;
-  /** Сервер сообщил об удалении. Сообщение ещё доступно в этот момент. */
+  /**
+   * Сервер сообщил об удалении. Данные — снимок на момент удаления, сам
+   * обработчик вызывается на следующей итерации: без сохранения удалённых
+   * AyuGram dzg.messages.get его уже может не найти.
+   */
   'message.deleted': Message;
   'chat.opened': Peer;
   /** Пользователь поменял настройку плагина в окне настроек. */
@@ -696,7 +719,8 @@ interface Widget {
   setProp(name: string, value: unknown): boolean;
   propNames(): string[];
 
-  /** Синтетический клик левой кнопкой в локальных координатах. */
+)DZG_TYPES",
+R"DZG_TYPES(  /** Синтетический клик левой кнопкой в локальных координатах. */
   click(x: number, y: number): void;
   typeText(text: string): void;
   /** Сохранить скриншот виджета в PNG. */
@@ -728,8 +752,7 @@ interface CreateProps {
   radius?: number;
   onClick?: (widget: Widget) => void;
   onChange?: (widget: Widget, value: string | boolean) => void;
-)DZG_TYPES",
-R"DZG_TYPES(  /** input: Enter (Ctrl+Enter в многострочном поле). */
+  /** input: Enter (Ctrl+Enter в многострочном поле). */
   onSubmit?: (widget: Widget, value: string) => void;
   on?: {
     click?: (widget: Widget) => void;
@@ -760,7 +783,10 @@ interface FetchResponse {
 
 interface DzgStorage {
   get<T = unknown>(key: string, fallback?: T): T;
-  /** Значение должно сериализоваться в JSON. */
+  /**
+   * Значение должно сериализоваться в JSON. Циклическая ссылка сохранится
+   * как null; слишком большое значение (около 4 млн элементов) — RangeError.
+   */
   set(key: string, value: unknown): void;
   remove(key: string): void;
   keys(): string[];
@@ -821,6 +847,10 @@ interface DzgMessages {
     runHooks?: boolean;
   }): boolean;
   edit(peerId: PeerId | Peer, messageId: number, text: string): boolean;
+  /**
+   * Удалить сообщения (revoke: true — и у собеседника). Локально удаляет сразу
+   * после текущего обработчика, а не внутри вызова.
+   */
   delete(peerId: PeerId | Peer, ids: number | number[], options?: { revoke?: boolean }): boolean;
   get(peerId: PeerId | Peer, messageId: number): Message | null;
   /** Последние сообщения, которые клиент уже загрузил в память. Запросов к серверу нет. */
@@ -843,8 +873,12 @@ interface DzgHttp {
 }
 
 interface DzgFs {
-  /** null, если файла нет. */
+  /** null, если файла нет. Относительный путь — от папки плагина. */
   read(path: string): string | null;
+  /**
+   * Записать текст в UTF-8, создав папки. Запись в папку своего плагина не
+   * вызывает горячую перезагрузку, но данные лучше держать в dzg.plugin.dataDir.
+   */
   write(path: string, text: string): boolean;
   list(path: string): string[];
   exists(path: string): boolean;
@@ -860,9 +894,18 @@ interface Dzg {
   readonly plugin: PluginInfo;
   readonly app: AppInfo;
 
+  /**
+   * Подписаться на событие; возвращает функцию отписки. Клиент присылает
+   * плагину только события, на которые есть обработчик. События сообщений,
+   * реакций, статусов, «печатает…», непрочитанных, фокуса, поля ввода и
+   * plugins.changed приходят на следующей итерации цикла событий; ready,
+   * unload, session.ready, chat.opened, settings.changed и theme.changed —
+   * сразу. Каждый вызов обработчика должен уложиться в 3 секунды.
+   */
   on<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
   off<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): void;
-  once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
+)DZG_TYPES",
+R"DZG_TYPES(  once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
 
   log(...args: unknown[]): void;
   /**
@@ -1228,7 +1271,10 @@ interface DzgMessages {
 }
 
 interface EventMap {
-  /** Кто-то поставил реакцию на твоё сообщение (новая непрочитанная реакция). */
+  /**
+   * Кто-то поставил реакцию на твоё сообщение (новая непрочитанная реакция).
+   * Приходит на следующей итерации цикла событий.
+   */
   'message.reaction': Message;
 }
 )DZG_TYPES",
@@ -1297,14 +1343,15 @@ interface DzgPlugins {
   get(id?: string): InstalledPlugin | null;
   /**
    * Включить или выключить плагин. Применяется сразу после текущего
-   * обработчика (не синхронно). false — нет такого плагина.
+   * обработчика (не синхронно): менеджер не грузит и не выгружает плагины,
+   * пока на стеке JS любого плагина. false — нет такого плагина.
    */
   setEnabled(id: string, enabled: boolean): boolean;
   enable(id: string): boolean;
   disable(id: string): boolean;
   /** Перезагрузить плагин (по умолчанию — текущий) после текущего обработчика. */
   reload(id?: string): boolean;
-  /** Перечитать папку плагинов и перезапустить все плагины. */
+  /** Перечитать папку плагинов и перезапустить все плагины (после текущего обработчика). */
   reloadAll(): boolean;
   /** Последние строки лога плагина (по умолчанию 100). Пусто, если не загружен. */
   log(id?: string, limit?: number): string[];
@@ -1325,9 +1372,9 @@ interface DzgPlugins {
   inspect(source: string): Promise<PluginPackageInfo>;
   /**
    * Тихо установить или обновить плагин (без окна подтверждения) и вернуть
-   * его id. Внимание: после установки нового плагина менеджер перечитывает
-   * папку и перезапускает все плагины, включая вызвавший, — промис
-   * может не дождаться ответа. Для магазинов плагинов удобнее promptInstall.
+   * его id. Новый плагин ставится без перезапуска остальных; обновление
+   * перезапускает только обновлённый плагин (если это вызвавший плагин,
+   * промис не дождётся ответа). Для магазинов плагинов удобнее promptInstall.
    */
   install(source: string, options?: { enable?: boolean }): Promise<string>;
   /**
@@ -1335,7 +1382,10 @@ interface DzgPlugins {
    * предупреждение о полном доступе). Промис выполняется, когда окно показано.
    */
   promptInstall(source: string): Promise<void>;
-  /** Удалить плагин. Встроенные только выключаются. */
+  /**
+   * Удалить плагин; остальные продолжают работать. Встроенные только
+   * выключаются. removeData: стереть storage и забыть настройки и состояние.
+   */
   uninstall(id: string, options?: { removeData?: boolean }): Promise<void>;
   /** Открыть раздел «Плагины» в настройках. */
   openManager(): void;

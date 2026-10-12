@@ -39,6 +39,16 @@ any palette change by the client (theme applied, night mode switched).
 Core events: `ready`, `unload`, `session.ready`, `message.new`,
 `message.edited`, `message.deleted`, `chat.opened`, `settings.changed`.
 
+Event delivery (added after v2 shipped): broadcasts reach only plugins that
+have a `dzg.on` handler for the event. Events born inside client
+notifications (`message.*`, `chat.typing`, `chat.unread`, `user.status`,
+`app.focus`, `compose.changed`, `plugins.changed`) are queued and delivered
+in order on the next event-loop iteration (`Manager::emitEventLater`).
+Message events come from every logged-in account; `Message.selfId` is the
+receiving account's peer id. `dzg.theme` overrides are layered per plugin:
+`reset()` removes only the caller's colors, and the client reapplies all
+plugin colors after a palette change. `dzg.theme.get(name)` reads a color.
+
 ## Module `messages` (api_messages.cpp)
 
 ```ts
@@ -161,4 +171,6 @@ or whose manifest lacks `"builtin": true`, is never overwritten (the user
 replaced it). `"enabledByDefault": false` in the manifest keeps a built-in
 plugin off on first install. Enabled by default unless noted: `command-palette`, `text-tools`, `deleted-alerts`, `reminders`,
 `chat-stats`, `ai-digest` (needs API key), `keyword-alerts`, `damza-theme`,
-`anti-ads`. Disabled by default: `auto-reply`.
+`anti-ads`, `automations` (does nothing until a rule exists),
+`quick-replies`, `bookmarks`, `chat-export`. Disabled by default:
+`auto-reply`.

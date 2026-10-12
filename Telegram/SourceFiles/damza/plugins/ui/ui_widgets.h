@@ -123,12 +123,16 @@ private:
 	void paintEvent(QPaintEvent *e) override;
 
 	void remove(QWidget *panel);
+	void applyTabTitles(int width);
 	void refreshTabs();
 	void updateInnerGeometry();
 
 	std::vector<QPointer<SidePanel>> _panels;
 	QPointer<SidePanel> _active;
 	object_ptr<Ui::SettingsSlider> _tabs = { nullptr };
+	std::vector<QString> _tabTitles;
+	std::vector<QString> _tabTitlesShown;
+	int _tabActive = 0;
 	rpl::event_stream<> _layoutRequests;
 
 };

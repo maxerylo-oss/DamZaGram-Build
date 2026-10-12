@@ -40,7 +40,11 @@ interface Message {
   replyToId: number;
   views: number;
   media?: MediaType;
-  /** Аккаунт, которому пришло сообщение: id его Peer (сравни с dzg.users.self().id). */
+  /**
+   * Аккаунт, которому пришло сообщение: id его Peer. События сообщений
+   * приходят от всех аккаунтов, а API работает от активного — прежде чем
+   * действовать, сравни с dzg.users.self().id.
+   */
   selfId: PeerId;
 }
 
@@ -69,14 +73,27 @@ interface AppInfo {
 interface EventMap {
   /** Плагин загружен и готов. Срабатывает и после горячей перезагрузки. */
   'ready': void;
-  /** Плагин выгружается: выключен, перезагружен или клиент закрывается. */
+  /**
+   * Плагин выгружается: выключен, перезагружен или клиент закрывается (окна
+   * и аккаунты ещё доступны). Регистрации, таймеры и цвета dzg.theme клиент
+   * уберёт сам.
+   */
   'unload': void;
   /** Аккаунт авторизован и его данные доступны. */
   'session.ready': Peer;
-  /** Новое сообщение (входящее или исходящее) появилось в любом чате. */
+  /**
+   * Новое сообщение (входящее или исходящее) появилось в любом чате любого
+   * аккаунта (см. Message.selfId). Приходит на следующей итерации цикла
+   * событий, а не внутри уведомления клиента.
+   */
   'message.new': Message;
+  /** Сообщение изменилось. Приходит на следующей итерации цикла событий. */
   'message.edited': Message;
-  /** Сервер сообщил об удалении. Сообщение ещё доступно в этот момент. */
+  /**
+   * Сервер сообщил об удалении. Данные — снимок на момент удаления, сам
+   * обработчик вызывается на следующей итерации: без сохранения удалённых
+   * AyuGram dzg.messages.get его уже может не найти.
+   */
   'message.deleted': Message;
   'chat.opened': Peer;
   /** Пользователь поменял настройку плагина в окне настроек. */
@@ -258,7 +275,10 @@ interface FetchResponse {
 
 interface DzgStorage {
   get<T = unknown>(key: string, fallback?: T): T;
-  /** Значение должно сериализоваться в JSON. */
+  /**
+   * Значение должно сериализоваться в JSON. Циклическая ссылка сохранится
+   * как null; слишком большое значение (около 4 млн элементов) — RangeError.
+   */
   set(key: string, value: unknown): void;
   remove(key: string): void;
   keys(): string[];
@@ -319,6 +339,10 @@ interface DzgMessages {
     runHooks?: boolean;
   }): boolean;
   edit(peerId: PeerId | Peer, messageId: number, text: string): boolean;
+  /**
+   * Удалить сообщения (revoke: true — и у собеседника). Локально удаляет сразу
+   * после текущего обработчика, а не внутри вызова.
+   */
   delete(peerId: PeerId | Peer, ids: number | number[], options?: { revoke?: boolean }): boolean;
   get(peerId: PeerId | Peer, messageId: number): Message | null;
   /** Последние сообщения, которые клиент уже загрузил в память. Запросов к серверу нет. */
@@ -341,8 +365,12 @@ interface DzgHttp {
 }
 
 interface DzgFs {
-  /** null, если файла нет. */
+  /** null, если файла нет. Относительный путь — от папки плагина. */
   read(path: string): string | null;
+  /**
+   * Записать текст в UTF-8, создав папки. Запись в папку своего плагина не
+   * вызывает горячую перезагрузку, но данные лучше держать в dzg.plugin.dataDir.
+   */
   write(path: string, text: string): boolean;
   list(path: string): string[];
   exists(path: string): boolean;
@@ -358,6 +386,14 @@ interface Dzg {
   readonly plugin: PluginInfo;
   readonly app: AppInfo;
 
+  /**
+   * Подписаться на событие; возвращает функцию отписки. Клиент присылает
+   * плагину только события, на которые есть обработчик. События сообщений,
+   * реакций, статусов, «печатает…», непрочитанных, фокуса, поля ввода и
+   * plugins.changed приходят на следующей итерации цикла событий; ready,
+   * unload, session.ready, chat.opened, settings.changed и theme.changed —
+   * сразу. Каждый вызов обработчика должен уложиться в 3 секунды.
+   */
   on<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
   off<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): void;
   once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;

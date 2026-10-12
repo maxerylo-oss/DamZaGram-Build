@@ -178,4 +178,7 @@ dzg.commands.register('acc', () => {
 ```
 
 События `user.status`, `chat.typing` и `chat.unread` приходят только для
-активного аккаунта.
+активного аккаунта. А `message.new`, `message.edited` и `message.deleted`
+приходят от всех аккаунтов: аккаунт-получатель — в `message.selfId`
+(сравни с `dzg.users.self().id`, прежде чем отвечать или что-то делать
+с сообщением).
