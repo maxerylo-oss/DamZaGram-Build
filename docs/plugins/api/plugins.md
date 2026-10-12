@@ -75,8 +75,8 @@ dzg.on('plugins.changed', ({ plugins }) => {
 
 ```js
 const profiles = {
-  work: ['keyword-alerts', 'reminders'],
-  chill: ['damza-theme', 'text-tools'],
+  work: ['chat-export', 'chat-stats'],
+  chill: ['damza-theme'],
 };
 
 dzg.commands.register('profile', ({ args }) => {
@@ -132,8 +132,8 @@ ES-модуля снаружи не видны — то, что нужно от�
 положить в `globalThis`.
 
 ```js
-const count = dzg.plugins.evaluate('reminders', 'dzg.storage.keys().length');
-console.log('Ключей в хранилище reminders:', count);
+const count = dzg.plugins.evaluate('chat-export', 'dzg.storage.keys().length');
+console.log('Ключей в хранилище chat-export:', count);
 ```
 
 Свой собственный плагин так вызвать нельзя (получишь `Error`): для этого

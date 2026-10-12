@@ -21,11 +21,6 @@ by [**@wetakush**](https://t.me/wetakush)
 <tr>
 <td align="center"><img src="docs/assets/screenshots/welcome.png" width="240" alt="Welcome"><br><sub>Welcome</sub></td>
 <td align="center"><img src="docs/assets/screenshots/plugins-manager.png" width="240" alt="Plugin manager"><br><sub>Plugin manager</sub></td>
-<td align="center"><img src="docs/assets/screenshots/command-palette.png" width="240" alt="Command palette"><br><sub>Command palette</sub></td>
-</tr>
-<tr>
-<td align="center"><img src="docs/assets/screenshots/automations.png" width="240" alt="Automations"><br><sub>Automations</sub></td>
-<td align="center"><img src="docs/assets/screenshots/quick-replies.png" width="240" alt="Quick replies"><br><sub>Quick replies</sub></td>
 <td align="center"><img src="docs/assets/screenshots/theme-panel.png" width="240" alt="DamZaGram theme"><br><sub>DamZaGram theme</sub></td>
 </tr>
 </table>
@@ -59,7 +54,7 @@ AyuGram's own documentation still applies to all of these: [docs.ayugram.one](ht
   native widgets, theme colors, HTTP, files, clipboard.
 - **Hot reload.** Save `main.js` and the plugin restarts instantly, no client restart.
 - **DevTools console.** Run JavaScript against the live client and watch plugin logs
-  (Settings → DamZaGram Preferences → Plugins → DevTools, `Ctrl+Enter` to run).
+  (Settings → Plugins → DevTools, `Ctrl+Enter` to run).
 - **Settings for free.** Describe settings in `manifest.json` and DamZaGram draws the UI.
 - **Typed API.** TypeScript definitions in [`docs/plugins/types`](docs/plugins/types) give autocompletion in any editor.
 
@@ -67,32 +62,28 @@ Full documentation: [`docs/plugins`](docs/plugins).
 
 ### Built-in plugins
 
-Fourteen plugins ship with the client. All of them except Auto-reply are on from the first start; turn any of them
-on or off and configure it in Settings → DamZaGram Preferences → Plugins (or press `Ctrl+Shift+P` outside a text field).
+Three plugins ship with the client and are on from the first start; turn any of them on or off and configure it in
+Settings → Plugins (or press `Ctrl+Shift+P` outside a text field).
 
 | Plugin | What it does |
 |---|---|
-| Command palette | `Ctrl+Shift+K`: fuzzy search over chats, plugin commands and client actions |
-| AI digest | "What did I miss": Claude summarizes the latest messages of a chat (`/digest`, needs an Anthropic API key) |
-| Deleted messages | Tells you who deleted what and where; journal of deleted messages |
-| Reminders | `/remind 10m buy bread`, `/remind 18:30 call`, "Remind me…" in the message menu |
-| Chat stats | Who writes the most, active hours and days, top words and emoji |
-| Keyword alerts | Notifies when a word or `/regex/` appears in any chat |
-| Auto-reply | "Away" mode for private chats (off by default) |
-| Text tools | `/calc`, wrong-layout fix ("ghbdtn" → "привет"), `/upper` `/mock` `/b64`…, `:shrug:` auto-replace |
-| Anti-ads | Hides ad posts (`erid:`, "Реклама", `#ad`…) in channels, `/antiads` |
-| DamZaGram theme | Monolith / Glass / Rail accent presets on top of any theme, `/theme` |
-| Automations | No-code "if → then" rules: a new message, a schedule or an opened chat → notify, reply, react, forward, save, mark read, mute, webhook; rate limits and a loop guard, `/auto` |
-| Quick replies | Text snippets with variables (`{first}`, `{date}`, `{?question}`): a button by the message field, `/q name`, `;;shortcut` |
-| Bookmarks | Bookmark any message with a note and tags; search panel `/bm`, top-bar button, Markdown export |
 | Chat export | A chat's history as a self-contained HTML page, Markdown or JSON, with progress and date ranges, `/export` |
+| Chat stats | Who writes the most, active hours and days, top words and emoji, `/stats` |
+| DamZaGram theme | Monolith / Glass / Rail accent presets on top of any theme, `/theme` |
+
+Built-in plugins that a newer client no longer ships are removed from `tdata/plugins/` on start (unless you removed
+`"builtin": true` from their manifest or the folder is a symlink).
 
 The source of each one lives in [`plugins/builtin`](plugins/builtin) — a good place to learn the API.
 What each plugin does in detail: [`docs/plugins/builtins.md`](docs/plugins/builtins.md).
 
 ### What's new
 
-- Four new built-in plugins: Automations, Quick replies, Bookmarks and Chat export.
+- Three built-in plugins instead of fourteen: Chat export, Chat stats and DamZaGram theme. On start the client removes
+  the built-ins it no longer ships; their data in `tdata/plugins_data/` stays.
+- Plugins moved to the first Settings page, right below DamZaGram Preferences.
+- Clicking a plugin file (`*.dzg.zip`, `*.dzg.js`, `*.plugin.js`) in a chat opens the install box; a file that isn't
+  downloaded yet is downloaded first, and the box opens by itself when the download finishes.
 - Plugin events such as `message.new` arrive on the next event-loop iteration instead of inside the client's own
   notifications, and only plugins that subscribed to an event receive it. Messages carry `selfId`, the account that
   received them.
@@ -105,7 +96,7 @@ What each plugin does in detail: [`docs/plugins/builtins.md`](docs/plugins/built
 
 ### Your first plugin in 30 seconds
 
-Open **Settings → DamZaGram Preferences → Plugins → Open plugins folder** (`<data>/tdata/plugins/`),
+Open **Settings → Plugins → Open plugins folder** (`<data>/tdata/plugins/`),
 create a folder `hello` with two files:
 
 `manifest.json`

@@ -169,8 +169,9 @@ Shipped inside the client and installed into `tdata/plugins/` on start
 (version-aware, `"builtin": true` in manifest). A folder that is a symlink,
 or whose manifest lacks `"builtin": true`, is never overwritten (the user
 replaced it). `"enabledByDefault": false` in the manifest keeps a built-in
-plugin off on first install. Enabled by default unless noted: `command-palette`, `text-tools`, `deleted-alerts`, `reminders`,
-`chat-stats`, `ai-digest` (needs API key), `keyword-alerts`, `damza-theme`,
-`anti-ads`, `automations` (does nothing until a rule exists),
-`quick-replies`, `bookmarks`, `chat-export`. Disabled by default:
-`auto-reply`.
+plugin off on first install. Shipped built-ins, all enabled by default:
+`chat-export`, `chat-stats`, `damza-theme`. After installing them the client
+removes retired built-ins: a folder in `tdata/plugins/` whose id is not
+shipped any more is deleted if its manifest has `"builtin": true` and an
+`id` equal to the folder name, and it is not a symlink or junction.
+`tdata/plugins_data/` is left alone.

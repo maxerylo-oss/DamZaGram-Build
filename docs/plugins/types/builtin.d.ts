@@ -35,7 +35,7 @@ interface DzgCommands {
   all(): PluginCommandInfo[];
   /**
    * Выполнить команду любого плагина так, будто пользователь отправил её в чат.
-   * text: '/digest 50' или 'digest 50'. chat: чат-контекст, по умолчанию текущий.
+   * text: '/stats 500' или 'stats 500'. chat: чат-контекст, по умолчанию текущий.
    * false — такой команды нет или её плагин сейчас занят.
    */
   run(text: string, chat?: Peer | PeerId): boolean;

@@ -53,7 +53,7 @@ EXTRA = {
     'CommandContext.text': 'Весь текст сообщения с командой.',
     'CommandContext.chat': 'Чат, в котором набрали команду.',
     'CommandContext.replyTo': 'id сообщения, на которое отвечали, или 0.',
-    'CommandSpec.description': 'Описание для командной палитры и dzg.commands.all().',
+    'CommandSpec.description': 'Описание команды, его отдаёт dzg.commands.all().',
     'CommandSpec.run': 'Вызывается вместо отправки сообщения.',
     'MenuItem.onClick': 'Клик по пункту.',
     'BoxSpec.title': 'Заголовок окна.',

@@ -238,7 +238,7 @@
 - `register(name: string, spec: CommandSpec | CommandSpec['run']): () => void` — Зарегистрировать слеш-команду. Команда срабатывает, когда пользователь отправляет "/name ...". Сообщение не уходит.
 - `list(): { name: string; description: string }[]` — Команды этого плагина.
 - `all(): PluginCommandInfo[]` — Команды всех загруженных плагинов, включая свои.
-- `run(text: string, chat?: Peer | PeerId): boolean` — Выполнить команду любого плагина так, будто пользователь отправил её в чат. text: '/digest 50' или 'digest 50'. chat: чат-контекст, по умолчанию текущий. false — такой команды нет или её плагин сейчас занят.
+- `run(text: string, chat?: Peer | PeerId): boolean` — Выполнить команду любого плагина так, будто пользователь отправил её в чат. text: '/stats 500' или 'stats 500'. chat: чат-контекст, по умолчанию текущий. false — такой команды нет или её плагин сейчас занят.
 
 ## `dzg.http`
 
@@ -413,7 +413,7 @@
 
 ### `CommandSpec`
 
-- `description?: string` — Описание для командной палитры и dzg.commands.all().
+- `description?: string` — Описание команды, его отдаёт dzg.commands.all().
 - `run(ctx: CommandContext): void | Promise<void>` — Вызывается вместо отправки сообщения.
 
 ### `MenuItem<T>`
