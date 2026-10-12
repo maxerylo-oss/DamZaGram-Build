@@ -1,0 +1,14 @@
+{
+  "id": "fake-balance",
+  "name": "Подмена баланса",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Показывает в клиенте любой баланс Telegram Stars и TON. Меняется только отображение у тебя: настоящий баланс на сервере не трогается и возвращается при выключении.",
+  "settings": [
+    { "key": "enabled", "type": "bool", "title": "Подменять баланс", "default": true },
+    { "key": "stars", "type": "number", "title": "Звёзды (Stars)", "default": 100000 },
+    { "key": "ton", "type": "number", "title": "TON", "default": 1000 },
+    { "key": "applyStars", "type": "bool", "title": "Подменять Stars", "default": true },
+    { "key": "applyTon", "type": "bool", "title": "Подменять TON", "default": true }
+  ]
+}
