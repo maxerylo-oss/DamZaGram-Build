@@ -266,7 +266,7 @@ QVariantMap Bridge::appInfo() const {
 	return {
 		{ u"name"_q, u"DamZaGram"_q },
 		{ u"version"_q, QString::fromLatin1(AppVersionStr) },
-		{ u"apiVersion"_q, 1 },
+		{ u"apiVersion"_q, 2 },
 		{ u"platform"_q, QSysInfo::productType() },
 		{ u"os"_q, QSysInfo::prettyProductName() },
 		{ u"pluginsPath"_q, Manager::Get().pluginsPath() },
@@ -663,7 +663,9 @@ bool Bridge::setThemeColor(const QString &name, const QString &color) {
 		uchar(parsed.green()),
 		uchar(parsed.blue()),
 		uchar(parsed.alpha()));
-	if (result != style::palette::SetResult::Ok) {
+	// Duplicate means "overrode a color the theme had set": still applied.
+	if (result != style::palette::SetResult::Ok
+		&& result != style::palette::SetResult::Duplicate) {
 		return false;
 	}
 	_themeChanged = true;
