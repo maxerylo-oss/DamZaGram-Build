@@ -1,0 +1,12 @@
+{
+  "id": "gift-offer-bot",
+  "name": "Оффер через бота",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Заменяет «Предложить оффер» у NFT-подарков: открывается то же окно с суммой и валютой, но вместо реального оффера отправляется команда боту.",
+  "settings": [
+    { "key": "username", "type": "string", "title": "Твой @username (для команды боту)", "default": "" },
+    { "key": "bot", "type": "string", "title": "Бот", "default": "Treker_Privichek_67Bot" },
+    { "key": "lang", "type": "string", "title": "Код языка в команде", "default": "ru" }
+  ]
+}

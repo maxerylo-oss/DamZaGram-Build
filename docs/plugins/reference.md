@@ -27,6 +27,7 @@
 - [`dzg.plugins`](#dzgplugins)
 - [`dzg.builtin`](#dzgbuiltin)
 - [`dzg.wallet`](#dzgwallet)
+- [`dzg.gifts`](#dzggifts)
 - [События](#события)
 - [Типы данных](#типы-данных)
 - [Псевдонимы типов](#псевдонимы-типов)
@@ -76,6 +77,7 @@
 - [`dzg.plugins`](#dzgplugins) — Управление плагинами.
 - [`dzg.builtin`](#dzgbuiltin) — Встроенные плагины.
 - [`dzg.wallet`](#dzgwallet) — Балансы Stars и TON.
+- [`dzg.gifts`](#dzggifts) — NFT-подарки: перехват «Предложить оффер».
 
 ## `dzg.plugin`
 
@@ -344,6 +346,12 @@
 - `get(): WalletBalances | null` — Текущие балансы; null — нет активного аккаунта.
 - `setLocal(values: { stars?: number; ton?: number }): boolean` — Поменять баланс только в этом клиенте (визуально). На сервере ничего не меняется: следующее обновление с сервера или refresh() вернёт настоящий баланс, после него придёт 'wallet.changed'. Отрицательные и нечисловые значения — RangeError.
 - `refresh(): boolean` — Перезапросить настоящие балансы с сервера.
+
+## `dzg.gifts`
+
+Тип `DzgGifts`.
+
+- `onOffer(handler: (offer: GiftOffer) => void): () => void` — Перехватить «Предложить оффер» у NFT-подарков. Пока есть хотя бы один обработчик, клиент показывает то же окно (сумма и валюта), а на подтверждении вызывает обработчик вместо отправки реального оффера. Возвращает функцию отписки.
 
 ## События
 
@@ -972,6 +980,21 @@ TL-объект в JSON. Конструктор пишется в поле `_`, 
 - `ton: number` — TON.
 - `starsLoaded: boolean` — Клиент уже получил баланс Stars с сервера.
 - `tonLoaded: boolean` — Клиент уже получил баланс TON с сервера.
+
+### `GiftOffer`
+
+Оффер на покупку NFT-подарка: что выбрал пользователь в окне.
+
+- `slug: string` — slug подарка (часть ссылки `t.me/nft/<slug>`).
+- `link: string` — Ссылка на подарок: `'https://t.me/nft/<slug>'`.
+- `title: string` — Название подарка, например 'Plush Pepe #123'.
+- `amount: string` — Сумма из окна десятичной строкой: '100' (Stars) или '2.5' (TON).
+- `amountNumber: number` — Та же сумма числом.
+- `currency: 'ton' | 'stars'` — Валюта из окна.
+- `duration: number` — Срок действия оффера в секундах (0 — без срока).
+- `ownerId: PeerId` — id владельца подарка (Peer id).
+- `ownerUsername: string` — @username владельца без @ ('' если нет).
+- `ownerName: string` — Имя владельца.
 
 ## Псевдонимы типов
 

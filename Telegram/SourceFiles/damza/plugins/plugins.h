@@ -2,6 +2,8 @@
 // a fork of AyuGram for Desktop.
 #pragma once
 
+#include <memory>
+
 // Entry points the rest of the client calls into the plugin system.
 // Everything here is safe to call before plugins are loaded: it is a no-op.
 
@@ -19,6 +21,14 @@ class PopupMenu;
 namespace Ui::Menu {
 struct MenuCallback;
 } // namespace Ui::Menu
+
+namespace ChatHelpers {
+class Show;
+} // namespace ChatHelpers
+
+namespace Data {
+struct UniqueGift;
+} // namespace Data
 
 namespace Damza::Plugins {
 
@@ -43,5 +53,12 @@ void FillMessageMenu(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 
 // Appends plugin actions to a chat (peer) menu.
 void FillPeerMenu(PeerData *peer, const Ui::Menu::MenuCallback &addAction);
+
+// NFT gift "offer to buy": if a plugin registered dzg.gifts.onOffer, show the
+// native price box and hand the chosen amount and currency to the plugin,
+// instead of sending a real offer. Returns true when a plugin took over.
+[[nodiscard]] bool InterceptGiftOffer(
+	std::shared_ptr<ChatHelpers::Show> show,
+	std::shared_ptr<Data::UniqueGift> unique);
 
 } // namespace Damza::Plugins

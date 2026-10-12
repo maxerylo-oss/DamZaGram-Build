@@ -17,3 +17,4 @@
 /// <reference path="./plugins.d.ts" />
 /// <reference path="./builtin.d.ts" />
 /// <reference path="./wallet.d.ts" />
+/// <reference path="./gifts.d.ts" />

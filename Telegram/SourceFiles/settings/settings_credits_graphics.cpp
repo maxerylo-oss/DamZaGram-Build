@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/settings_credits_graphics.h"
 
+#include "damza/plugins/plugins.h"
 #include "api/api_chat_invite.h"
 #include "api/api_credits.h"
 #include "api/api_earn.h"
@@ -1259,6 +1260,9 @@ void FillUniqueGiftMenu(
 		}
 	} else if (ShowOfferBuyButton(&show->session(), e)) {
 		menu->addAction(tr::lng_gift_offer_button(tr::now), [=] {
+			if (Damza::Plugins::InterceptGiftOffer(show, unique)) { // DamZaGram
+				return;
+			}
 			ShowOfferBuyBox(show, unique);
 		}, st.offer ? st.offer : &st::menuIconEarn);
 	}
