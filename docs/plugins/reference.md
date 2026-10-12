@@ -26,6 +26,7 @@
 - [`dzg.api`](#dzgapi)
 - [`dzg.plugins`](#dzgplugins)
 - [`dzg.builtin`](#dzgbuiltin)
+- [`dzg.wallet`](#dzgwallet)
 - [События](#события)
 - [Типы данных](#типы-данных)
 - [Псевдонимы типов](#псевдонимы-типов)
@@ -74,6 +75,7 @@
 - [`dzg.api`](#dzgapi) — Сырой MTProto: любой метод Telegram API.
 - [`dzg.plugins`](#dzgplugins) — Управление плагинами.
 - [`dzg.builtin`](#dzgbuiltin) — Встроенные плагины.
+- [`dzg.wallet`](#dzgwallet) — Балансы Stars и TON.
 
 ## `dzg.plugin`
 
@@ -335,6 +337,14 @@
 
 - `list(): BuiltinPluginInfo[]` — Встроенные плагины и их состояние после установки на старте.
 
+## `dzg.wallet`
+
+Тип `DzgWallet`.
+
+- `get(): WalletBalances | null` — Текущие балансы; null — нет активного аккаунта.
+- `setLocal(values: { stars?: number; ton?: number }): boolean` — Поменять баланс только в этом клиенте (визуально). На сервере ничего не меняется: следующее обновление с сервера или refresh() вернёт настоящий баланс, после него придёт 'wallet.changed'. Отрицательные и нечисловые значения — RangeError.
+- `refresh(): boolean` — Перезапросить настоящие балансы с сервера.
+
 ## События
 
 Подписка: `dzg.on(name, (data) => { ... })`, отписка — функция, которую вернул `on`. Подробно: [гайд по событиям](guide/02-events.md).
@@ -355,6 +365,7 @@
 - `app.focus` → `{ active: boolean }` — Окно клиента стало активным или неактивным.
 - `compose.changed` → `{ chat: Peer | null; text: string }` — Текст в поле ввода изменился. Не чаще раза в ~300 мс.
 - `plugins.changed` → `{ plugins: InstalledPlugin[] }` — Список плагинов изменился: установили, удалили, включили, выключили, обновили версию. Изменения только текста ошибки не считаются.
+- `wallet.changed` → `WalletBalances` — Баланс Stars или TON активного аккаунта изменился (с сервера или через setLocal). Приходит на следующей итерации цикла событий.
 
 ## Типы данных
 
@@ -952,6 +963,15 @@ TL-объект в JSON. Конструктор пишется в поле `_`, 
 - `description: string` — Описание команды.
 - `plugin: string` — id плагина, который зарегистрировал команду.
 - `pluginName: string` — Название плагина.
+
+### `WalletBalances`
+
+Балансы активного аккаунта, как их сейчас показывает клиент.
+
+- `stars: number` — Звёзды Telegram Stars (дробная часть — нано-звёзды).
+- `ton: number` — TON.
+- `starsLoaded: boolean` — Клиент уже получил баланс Stars с сервера.
+- `tonLoaded: boolean` — Клиент уже получил баланс TON с сервера.
 
 ## Псевдонимы типов
 

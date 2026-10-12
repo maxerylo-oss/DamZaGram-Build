@@ -1,0 +1,179 @@
+# DamZaGram
+
+> DamZaGram is a Telegram Desktop client by @wetakush (https://t.me/wetakush), a fork of AyuGram Desktop (C++20/Qt6), with a full JavaScript plugin system. Plugins run inside the client on QuickJS-ng (ES2023, ES modules, async/await), each in its own runtime, and can read and send messages, call any Telegram API method (raw MTProto), add buttons, menus, panels and shortcuts, recolor the theme and touch any widget of the window. This file tells an AI agent how to write, test and ship DamZaGram plugins correctly. Full API dump: docs/plugins/llms-full.txt.
+
+Plugins have full access to the client and the user's account. Write code the user asked for; never send messages, delete data or call destructive API methods unless that is the plugin's stated purpose.
+
+## Plugin anatomy
+
+A plugin is a folder in `<data dir>/tdata/plugins/<id>/` (data dir: `~/.local/share/DamZaGramDesktop` on Linux, `%APPDATA%\DamZaGram Desktop` on Windows; `dzg.app.pluginsPath` has the exact path):
+
+```
+my-plugin/
+  manifest.json   required
+  main.js         entry point (ES module by default)
+  lib/*.js        optional, `import { x } from './lib/x.js'`
+```
+
+`manifest.json`:
+
+```json
+{
+  "id": "my-plugin",
+  "name": "My plugin",
+  "version": "1.0.0",
+  "author": "@you",
+  "description": "What it does",
+  "main": "main.js",
+  "type": "module",
+  "settings": [
+    { "key": "enabled", "type": "bool", "title": "Enabled", "default": true },
+    { "key": "word", "type": "string", "title": "Keyword", "default": "hello" },
+    { "key": "text", "type": "text", "title": "Multiline text", "default": "" },
+    { "key": "limit", "type": "number", "title": "Limit", "default": 50, "min": 1, "max": 500, "integer": true },
+    { "key": "mode", "type": "select", "title": "Mode", "default": "short", "options": [{ "value": "short", "title": "Short" }, { "value": "long", "title": "Long" }] },
+    { "key": "accent", "type": "color", "title": "Color", "default": "#C8F135" }
+  ]
+}
+```
+
+- `id`: 1–64 chars, `[A-Za-z0-9._-]`, starting with a letter or digit (it names files; lowercase is conventional). Defaults to the folder name. Invalid ids are skipped.
+- `type`: `"module"` (default, ES module: `import`, top-level `await`, strict mode, module-scoped variables) or `"script"` (classic global script).
+- `settings` builds the plugin's settings box automatically (types: `bool`, `string`, `text`, `number`, `select`, `color`); read with `dzg.settings.get(key)`, react to `settings.changed`.
+- Single-file plugins (`name.plugin.js`, `name.dzg.js`, or any `.js` with a header) declare the manifest in a header comment: `// @id my-plugin`, `// @name ...`, `// @version 1.0.0`, `// @author ...`, `// @description ...`.
+- Packages: a folder, a `.zip`/`.dzg.zip` with `manifest.json` at the root, or a single `.js`. Install via Settings › Plugins › Install… (file, folder, URL), drag & drop onto that page, or by clicking such a file in any chat (it is downloaded first, then an install box with a full-access warning opens).
+
+## Lifecycle and environment
+
+- `main.js` runs once on load. Register handlers at top level. Then the `ready` event fires (also after every hot reload).
+- On disable / reload / client quit, `unload` fires. Timers, menu items, buttons, shortcuts, filters, hooks, panels, created widgets and `dzg.theme` colors are removed automatically. Close your own long-running work there.
+- Hot reload (on by default): saving any file in the plugin folder (including subfolders, up to 256 paths) reloads that plugin within ~300 ms. Files the plugin writes itself via `dzg.fs.write` do not trigger it.
+- Module variables are lost on reload. Persist with `dzg.storage` (JSON file `tdata/plugins_data/<id>.json`).
+- Watchdog: one entry from the client into JS (an event handler, timer, hook, filter, menu callback) may run at most 3 s, then it is interrupted with an `InternalError: interrupted` and logged. Load (`main.js` top level) gets 10 s. Never loop synchronously over big data: page with `await`.
+- Globals: `console.*`, `setTimeout/setInterval/clear*`, `queueMicrotask`, `Promise`, `Map`, `Set`, `BigInt`, `atob/btoa`, `performance.now()`. Not available: `fetch` (use `dzg.http.fetch`), `Intl`, `TextEncoder`, `structuredClone`, DOM, Node APIs.
+- Values crossing JS↔C++ are plain JSON-like data: functions are dropped, cyclic references become `null`, very large values (~4M items) throw `RangeError`.
+- Errors: uncaught exceptions and unhandled rejections go to the plugin log (Settings › Plugins › Log, or the client's log.txt prefixed `Plugin <id>`); in dev mode a toast shows the first line.
+
+## Core rules (avoid the common bugs)
+
+1. Peer ids are STRINGS (`Peer.id`, 64-bit values don't fit a double). Every API taking a peer accepts a `Peer` object or its id string. `Peer.tgId` is the bare numeric Telegram id, for display only.
+2. Messages are addressed by `(peer, messageId)`; message ids are numbers.
+3. Message events (`message.new/edited/deleted`) fire for EVERY logged-in account; `dzg.*` calls act on the ACTIVE account. Check `message.selfId === dzg.users.self()?.id` before acting.
+4. Events are only dispatched to plugins that subscribed (`dzg.on`). `message.*`, `message.reaction`, `chat.typing`, `chat.unread`, `user.status`, `app.focus`, `compose.changed`, `wallet.changed`, `plugins.changed` arrive on the next event-loop iteration (outside client internals), so handlers may safely send/delete.
+5. Never react to your own outgoing messages unless intended (`message.out`), never auto-reply to bots/channels, rate-limit every automatic action, and guard against loops (a plugin's own `dzg.messages.send` does NOT go through `onBeforeSend` unless `runHooks: true`).
+6. `dzg.messages.addFilter` and `addRenderTransform` run during painting/layout: keep them pure and fast, no API calls, no UI. Results are cached per message; call `refilter()` / `refreshRender()` when your conditions change.
+7. `when()` / `title()` callbacks of menu items and top-bar buttons run while the client builds menus: no side effects.
+8. Async API calls return Promises that reject with `Error` ('400: PEER_ID_INVALID', 'TIMEOUT', ...). Sync lookups never throw for "not found": they return `null` / `false` / `[]`.
+9. `dzg.plugins.setEnabled/reload/...` from plugin code are applied after the current handler returns, never synchronously.
+10. UI text: the user base is Russian-speaking; keep UI strings short, no emoji decorations.
+
+## API map (all under the global `dzg`)
+
+Events: `dzg.on(name, fn) -> off()`, `dzg.off`, `dzg.once`.
+`ready`, `unload`, `session.ready (Peer)`, `message.new|edited|deleted (Message)`, `message.reaction (Message)`, `chat.opened (Peer)`, `chat.typing {chat, user, action, topicId}`, `chat.unread {chat, unread, unreadMark, mentions}`, `user.status {user, online, lastSeen, kind}`, `settings.changed {key, value}`, `theme.changed {night}`, `app.focus {active}`, `compose.changed {chat, text}`, `wallet.changed {stars, ton, ...}`, `plugins.changed {plugins}`.
+
+Info: `dzg.version` (2), `dzg.plugin {id, name, version, author, description, dir, dataDir}`, `dzg.app {name, version, apiVersion, platform, os, pluginsPath, devMode, language(), isNightMode(), setNightMode(b), restart()}`.
+
+Storage and settings: `dzg.storage.get(key, fallback) / set(key, value) / remove(key) / keys()`; `dzg.settings.get(key) / all() / set(key, value)`.
+
+Messages (`dzg.messages`):
+- `send(peer, text, {parse: 'markdown'|'html'|'none', replyTo, topicId, silent, scheduleDate, noWebpage, entities, runHooks}) -> boolean`
+- `edit(peer, id, text, {parse, noWebpage, entities}) -> boolean`, `delete(peer, ids, {revoke}) -> boolean`
+- `get(peer, id) -> Message|null` (memory), `loaded(peer, limit) -> Message[]` (memory)
+- `history(peer, {limit, offsetId, addOffset, offsetDate, minId, maxId}) -> Promise<Message[]>` (server, oldest first)
+- `iterate(peer, {limit, batch, offsetId}) -> AsyncGenerator<Message>` (newest first): `for await (const m of dzg.messages.iterate(chat, {limit: 5000})) { ... }`
+- `search(peer|null, query, {limit, from, filter, minDate, maxDate, ...}) -> Promise<Message[]>`, `fetch(peer, id|ids)`
+- `forward(fromPeer, ids, toPeer, {silent, dropAuthor, dropCaptions}) -> Promise`, `react(peer, id, emoji|null)`, `reactions(peer, id)`, `pin(peer, id, {silent, unpin, oneSide})`, `unpin`, `markRead(peer, {tillId})`
+- `sendFile(peer, path|paths, {caption, parse, asDocument, album, spoiler, replyTo, silent, scheduleDate}) -> boolean`, `download(peer, id, path?) -> Promise<string>`
+- `link(peer, id) -> string|null`, `clickButton(peer, id, row, column | text, {open}) -> Promise<{answer?, url?, alert?}>`
+- `parse(text, 'markdown'|'html') -> {text, entities}`, `format(message|{text, entities}, 'html'|'markdown')`
+- `addFilter(msg => boolean)` (true hides), `onBeforeSend(ctx => string | false | {text} | {cancel: true} | void)`, `addRenderTransform(msg => string|null)`, `refilter()`, `refreshRender()`
+
+Chats (`dzg.chats`): `current()`, `get(peer)`, `find(username)` (loaded only), `open(peer, messageId?)`, `list({folder, limit}) -> ChatListEntry[]`, `entry(peer)`, `folders()`, `resolve(username) -> Promise<Peer|null>` (server), `join(usernameOrInvite) -> Promise<Peer>`, `leave(peer)`, `mute(peer, seconds|true|false)`, `unmute`, `archive(peer, bool)`, `pin(peer, bool)`, `markUnread(peer, bool)`, `markRead(peer)`, `setTyping(peer, action)` (`typing`, `cancel`, `record_voice`, `upload_photo`, ... see `dzg.chats.typingActions`), `members(peer, {limit, query}) -> Promise<ChatMember[]>`, `info(peer) -> Promise<ChatInfo>`, `create({type, title, ...})`, `addMembers`, `kick(peer, user, {ban})`, `setTitle`, `setAbout`, `createInviteLink`, `clearHistory(peer, {revoke})`.
+
+Users (`dzg.users`): `self()`, `get(peer)`, `status(peer)`, `isBlocked(peer)`, `info(peer) -> Promise<UserInfo>`, `contacts()`, `block(peer, bool)`, `unblock`, `commonChats(peer)`, `addContact(peer, {...})`, `deleteContact(peer)`.
+Accounts (`dzg.accounts`): `list() -> {index, self, active}[]`, `current()`, `switchTo(index)`.
+Wallet (`dzg.wallet`): `get() -> {stars, ton, starsLoaded, tonLoaded}|null`, `setLocal({stars, ton})` (local display only), `refresh()`.
+
+Raw MTProto (`dzg.api`):
+- `call(method, params, {timeout, dc, floodSleep, applyResult}) -> Promise<TL>`; field names exactly as in `Telegram/SourceFiles/mtproto/scheme/api.tl`; constructors are objects with `_`: `{_: 'inputPeerSelf'}`; `long` = decimal string, `bytes` = base64 string, flags are computed from present optional fields; `random_id` / `hash` are filled automatically. Where InputPeer/InputUser/InputChannel is expected you may pass a Peer, a Message, an id string or `'me'`.
+- `inputPeer(peer)`, `inputUser(peer)`, `inputChannel(peer)`, `peerId(tlPeer) -> PeerId|null`
+- `onUpdate(type | type[] | '*', (update, meta) => {})` for raw `Update` objects (`updateUserTyping`, `updateNewMessage`, ...)
+- `schema(name)`, `constructors(type)`, `search(query)`, `encode(obj, type)`, `decode(data, type)`, `toBase64`, `fromBase64`, `layer`
+- Example: `const r = await dzg.api.call('messages.getHistory', {peer: chat, limit: 10, offset_id: 0, offset_date: 0, add_offset: 0, max_id: 0, min_id: 0}); r.messages.forEach(m => console.log(m._, m.message));`
+
+UI (`dzg.ui`):
+- `toast(text, title?)`, `alert(text, title?)`, `confirm(text, {title, confirmText, cancelText, danger}) -> Promise<boolean>`, `prompt(title, {text, placeholder, value, multiline}) -> Promise<string|null>`, `box({title, text, inputs:[{id, placeholder, value, multiline}], toggles:[{id, text, checked}], buttons:[{id, text, danger}]}) -> Promise<{button, values}>`
+- `notify({title, text, onClick, silent} | string)` (in-app notification)
+- `addMessageMenuItem({title: string | (msg => string), when?, onClick(msg)})`, `addChatMenuItem({title, when?, onClick(peer)})`, `addMainMenuItem({title, icon, onClick})`, `addTopBarButton({icon, text, tooltip, when?(chat), onClick(chat)})`, `addShortcut('Ctrl+Shift+K', fn)`, `icons()` (names usable as `icon`), `openLink(url)` (t.me / tg:// handled inside)
+- `compose.get() -> {chat, text}|null`, `compose.set(text)`, `compose.insert(text)`, `compose.focus()`, `compose.addButton({icon, text, tooltip, onClick(chat)})`
+- `panel({title, width}) -> Panel` (docked right; tabs when several): `addLabel(text, {bold, muted})`, `addButton(text, onClick, {style: 'light'})`, `addInput({placeholder, value, multiline, onSubmit, onChange})`, `addToggle(text, checked, onChange)`, `addSeparator()`, `addSkip(px)`, `clear()`, `setTitle()`, `close()`, `on('close', fn)`, `isOpen()`, `widget`
+- Widget tree: `mainWindow()`, `focused()`, `find(className, objectName) -> Widget[]` (real C++ class names, e.g. `HistoryView::TopBarWidget`, `Dialogs::InnerWidget`); `Widget`: `className()`, `classChain()`, `geometry()`, `setGeometry()`, `move`, `resize`, `show`, `hide`, `raise`, `setOpacity`, `childWidgets()`, `find()`, `childAt()`, `prop()`, `setProp()`, `text()`, `setText()`, `click(x, y)`, `typeText()`, `grab(path)` (PNG), `dump(depth)`, `destroy()`, `on(event, fn)`
+- `create('label'|'button'|'input'|'checkbox'|'panel', parent|null, {x, y, width, height, text, placeholder, color, radius, style, onClick, onChange, onSubmit}) -> Widget` (native Telegram look)
+- Theme: `dzg.theme.set(name, '#RRGGBB'[AA])`, `setMany({...})`, `get(name)`, `reset()` (removes only this plugin's colors; reapplied automatically after theme/night switches). Color names: `Telegram/lib_ui/ui/colors.palette` (e.g. `windowBg`, `windowBgActive`, `activeButtonBg`, `msgOutBg`, `dialogsBgActive`).
+
+Commands: `dzg.commands.register('name', {description, run({args, rest, text, chat, replyTo})})` — sending `/name ...` in any chat runs it and the message is NOT sent. `list()`, `all()`, `run('/name args', chat?)`.
+Network and files: `dzg.http.fetch(url, {method, headers, body, json, timeout}) -> Promise<{status, ok, headers, url, text(), json()}>` (text only, no CORS); `dzg.fs.read/write/list/exists` (relative paths = plugin folder; prefer `dzg.plugin.dataDir` for data); `dzg.clipboard.get/set`; `dzg.openUrl(url)`.
+Plugins: `dzg.plugins.list/get/setEnabled/enable/disable/reload/reloadAll/log/settings/setSetting/evaluate/inspect/install/promptInstall/uninstall/openManager/openDevTools`, `dzg.require(path)` (CommonJS).
+
+## Minimal example
+
+```js
+// main.js — mark every incoming message that mentions a keyword
+const word = () => String(dzg.settings.get('word') || '').toLowerCase();
+
+dzg.on('message.new', (m) => {
+  const self = dzg.users.self();
+  if (!self || m.selfId !== self.id || m.out || m.service || !word()) return;
+  if (m.text.toLowerCase().includes(word())) {
+    dzg.ui.notify({ title: m.chat.name, text: m.fromName + ': ' + m.text, onClick: () => dzg.chats.open(m.chat, m.id) });
+  }
+});
+
+dzg.commands.register('count', {
+  description: 'Count messages in this chat: /count 500',
+  async run({ args, chat }) {
+    const limit = Math.min(Number(args[0]) || 200, 5000);
+    let n = 0;
+    for await (const m of dzg.messages.iterate(chat, { limit })) if (!m.service) n++;
+    dzg.ui.toast(`${n} messages`, chat.name);
+  },
+});
+
+dzg.ui.addMessageMenuItem({
+  title: 'Copy as quote',
+  when: (m) => !!m.text,
+  onClick: (m) => dzg.clipboard.set(m.text.split('\n').map((l) => '> ' + l).join('\n')),
+});
+```
+
+## Testing without the client
+
+From the repo root (needs `out-qjs/qjs`, built from `Telegram/ThirdParty/quickjs-ng`):
+
+- `tools/damza/sandbox.py path/to/main.js [test.js] [--setup=setup.js]` runs the real prelude and every API module's JS against a mocked native bridge. In tests: `sandbox.event(name, data)`, `sandbox.dispatch(type, payload)`, `sandbox.settle(id, ok, value)`, `sandbox.runTimers()`, `sandbox.called(nativeName)`, `sandbox.native[name] = fn` (stub), `sandbox.returns[name] = value`, `sandbox.settings`, `sandbox.storage`, `sandbox.eq(a, b)`, `sandbox.assert(cond)`. Native names are module-prefixed (`messages_send`, `chats_list`, `wallet_setLocal`).
+- In the running client: Settings › Plugins › DevTools (JS console in a plugin's scope + live log), or `dzg.plugins.evaluate(id, code)`.
+- Typings for editors: `docs/plugins/types/index.d.ts` (`jsconfig.json`: `"include": ["**/*.js", "types/*.d.ts"]`; the client's "Create plugin" wizard copies them).
+
+## Working on the client itself (C++)
+
+- Plugin system sources: `Telegram/SourceFiles/damza/` (`plugins/plugin_*.{h,cpp}` core, `plugins/api/api_*.cpp` API modules registered with `DZG_API_MODULE`, `plugins/ui/` panels and buttons, `ui/` settings page, DevTools, install boxes). Read `docs/plugins/ARCHITECTURE.md` first.
+- New API module: copy `plugins/api/api_app.cpp` (natives prefixed with the module name + a JS fragment in `R"DZG_JS( ... )DZG_JS"` that extends `dzg`), add `docs/plugins/types/<module>.d.ts`, then run `python3 tools/damza/embed_types.py` and `python3 tools/damza/gen_reference.py`. New files under `damza/` are picked up by a CMake glob.
+- Verify C++ without a full build: `tools/damza/check.py <file.cpp>` (syntax-only with the real flags). Build: `cmake --build out --target Telegram` (Debug, Ninja). Run: `tools/damza/run-dev.sh`.
+- Built-in plugins live in `plugins/builtin/<id>/` (`"builtin": true`) and are embedded with `python3 tools/damza/embed_builtins.py`; tests: `python3 tools/damza/tests/builtins/run.py`. Example (non-built-in) plugins: `plugins/examples/`.
+- Repo rules: `AGENTS.md` (code style, no `Co-Authored-By` trailers). Keep hooks into upstream tdesktop/AyuGram files to one or two lines calling into `damza/`.
+
+## Docs
+
+- [Plugin docs overview](docs/plugins/README.md): quick start, manifest, lifecycle, JS environment, FAQ
+- [API reference](docs/plugins/reference.md): every `dzg.*` member, event and type (generated from the typings)
+- [Typings](docs/plugins/types/index.d.ts): TypeScript declarations, the ground truth for signatures
+- [Guides](docs/plugins/guide/): 01 first plugin, 02 events, 03 messages, 04 chats and users, 05 UI, 06 commands and hooks, 07 network and storage, 08 raw MTProto, 09 debugging, 10 publishing
+- [Module references](docs/plugins/api/): messages, chats, users, ui, mtproto, plugins, builtin
+- [Cookbook](docs/plugins/cookbook.md): 26 complete recipes
+- [Built-in plugins](docs/plugins/builtins.md), [Plugin manager](docs/plugins/manager.md), [Architecture](docs/plugins/ARCHITECTURE.md)
+
+## Optional
+
+- [Full API dump for agents](docs/plugins/llms-full.txt): this file + all typings + reference, in one text file
+- [Example plugins](plugins/examples/): hello, anti-ads, text-tools, ui-playground, ui-showcase, chat-tools, fake-balance

@@ -16,3 +16,4 @@
 /// <reference path="./api.d.ts" />
 /// <reference path="./plugins.d.ts" />
 /// <reference path="./builtin.d.ts" />
+/// <reference path="./wallet.d.ts" />

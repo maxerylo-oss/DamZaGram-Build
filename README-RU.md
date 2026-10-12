@@ -194,6 +194,8 @@ tools/damza/install-desktop-entry.sh --uninstall
 
 ### Инструменты разработчика
 
+**Для ИИ-агентов:** [`llms.txt`](llms.txt) — сжатое руководство по написанию плагинов DamZaGram (правила, карта API, тесты); [`docs/plugins/llms-full.txt`](docs/plugins/llms-full.txt) — то же плюс полный справочник и типы (пересобирается `python3 tools/damza/build_llms.py`).
+
 - `tools/damza/check.py <файл.cpp>` — проверка синтаксиса одного файла с настоящими флагами сборки, за секунды.
 - `tools/damza/sandbox.py <плагин/main.js> [test.js]` — запуск плагина на настоящем JS API в чистом QuickJS с подменённым клиентом.
 - `tools/damza/tests/builtins/run.py [id…]` — тесты встроенных плагинов в той же песочнице.

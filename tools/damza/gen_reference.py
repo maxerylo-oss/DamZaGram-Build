@@ -292,10 +292,11 @@ LINKS = {
     'dzg.api': ('guide/08-raw-mtproto.md', 'api/mtproto.md'),
     'dzg.plugins': ('guide/10-publishing.md', 'api/plugins.md'),
     'dzg.builtin': (None, 'api/builtin.md'),
+    'dzg.wallet': (None, None),
 }
 
 ORDER = ['core.d.ts', 'app.d.ts', 'messages.d.ts', 'chats.d.ts', 'users.d.ts',
-         'ui.d.ts', 'api.d.ts', 'plugins.d.ts', 'builtin.d.ts']
+         'ui.d.ts', 'api.d.ts', 'plugins.d.ts', 'builtin.d.ts', 'wallet.d.ts']
 
 NAMESPACE_TYPES = {'AppInfo', 'PluginInfo'}
 

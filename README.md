@@ -194,6 +194,8 @@ Or install system-wide with `sudo cmake --install out`.
 
 ### Developer tools
 
+**For AI agents:** [`llms.txt`](llms.txt) is a compact guide to writing DamZaGram plugins (rules, API map, testing); [`docs/plugins/llms-full.txt`](docs/plugins/llms-full.txt) adds the full reference and typings (`python3 tools/damza/build_llms.py` regenerates it).
+
 - `tools/damza/check.py <file.cpp>` — syntax-only compile of a single file with the real flags, in seconds.
 - `tools/damza/sandbox.py <plugin/main.js> [test.js]` — runs a plugin against the real JS API in plain QuickJS with a mocked client.
 - `tools/damza/tests/builtins/run.py [id…]` — the tests of the built-in plugins, in the same sandbox.

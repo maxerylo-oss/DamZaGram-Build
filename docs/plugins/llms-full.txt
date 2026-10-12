@@ -1,0 +1,2986 @@
+# DamZaGram
+
+> DamZaGram is a Telegram Desktop client by @wetakush (https://t.me/wetakush), a fork of AyuGram Desktop (C++20/Qt6), with a full JavaScript plugin system. Plugins run inside the client on QuickJS-ng (ES2023, ES modules, async/await), each in its own runtime, and can read and send messages, call any Telegram API method (raw MTProto), add buttons, menus, panels and shortcuts, recolor the theme and touch any widget of the window. This file tells an AI agent how to write, test and ship DamZaGram plugins correctly. Full API dump: docs/plugins/llms-full.txt.
+
+Plugins have full access to the client and the user's account. Write code the user asked for; never send messages, delete data or call destructive API methods unless that is the plugin's stated purpose.
+
+## Plugin anatomy
+
+A plugin is a folder in `<data dir>/tdata/plugins/<id>/` (data dir: `~/.local/share/DamZaGramDesktop` on Linux, `%APPDATA%\DamZaGram Desktop` on Windows; `dzg.app.pluginsPath` has the exact path):
+
+```
+my-plugin/
+  manifest.json   required
+  main.js         entry point (ES module by default)
+  lib/*.js        optional, `import { x } from './lib/x.js'`
+```
+
+`manifest.json`:
+
+```json
+{
+  "id": "my-plugin",
+  "name": "My plugin",
+  "version": "1.0.0",
+  "author": "@you",
+  "description": "What it does",
+  "main": "main.js",
+  "type": "module",
+  "settings": [
+    { "key": "enabled", "type": "bool", "title": "Enabled", "default": true },
+    { "key": "word", "type": "string", "title": "Keyword", "default": "hello" },
+    { "key": "text", "type": "text", "title": "Multiline text", "default": "" },
+    { "key": "limit", "type": "number", "title": "Limit", "default": 50, "min": 1, "max": 500, "integer": true },
+    { "key": "mode", "type": "select", "title": "Mode", "default": "short", "options": [{ "value": "short", "title": "Short" }, { "value": "long", "title": "Long" }] },
+    { "key": "accent", "type": "color", "title": "Color", "default": "#C8F135" }
+  ]
+}
+```
+
+- `id`: 1–64 chars, `[A-Za-z0-9._-]`, starting with a letter or digit (it names files; lowercase is conventional). Defaults to the folder name. Invalid ids are skipped.
+- `type`: `"module"` (default, ES module: `import`, top-level `await`, strict mode, module-scoped variables) or `"script"` (classic global script).
+- `settings` builds the plugin's settings box automatically (types: `bool`, `string`, `text`, `number`, `select`, `color`); read with `dzg.settings.get(key)`, react to `settings.changed`.
+- Single-file plugins (`name.plugin.js`, `name.dzg.js`, or any `.js` with a header) declare the manifest in a header comment: `// @id my-plugin`, `// @name ...`, `// @version 1.0.0`, `// @author ...`, `// @description ...`.
+- Packages: a folder, a `.zip`/`.dzg.zip` with `manifest.json` at the root, or a single `.js`. Install via Settings › Plugins › Install… (file, folder, URL), drag & drop onto that page, or by clicking such a file in any chat (it is downloaded first, then an install box with a full-access warning opens).
+
+## Lifecycle and environment
+
+- `main.js` runs once on load. Register handlers at top level. Then the `ready` event fires (also after every hot reload).
+- On disable / reload / client quit, `unload` fires. Timers, menu items, buttons, shortcuts, filters, hooks, panels, created widgets and `dzg.theme` colors are removed automatically. Close your own long-running work there.
+- Hot reload (on by default): saving any file in the plugin folder (including subfolders, up to 256 paths) reloads that plugin within ~300 ms. Files the plugin writes itself via `dzg.fs.write` do not trigger it.
+- Module variables are lost on reload. Persist with `dzg.storage` (JSON file `tdata/plugins_data/<id>.json`).
+- Watchdog: one entry from the client into JS (an event handler, timer, hook, filter, menu callback) may run at most 3 s, then it is interrupted with an `InternalError: interrupted` and logged. Load (`main.js` top level) gets 10 s. Never loop synchronously over big data: page with `await`.
+- Globals: `console.*`, `setTimeout/setInterval/clear*`, `queueMicrotask`, `Promise`, `Map`, `Set`, `BigInt`, `atob/btoa`, `performance.now()`. Not available: `fetch` (use `dzg.http.fetch`), `Intl`, `TextEncoder`, `structuredClone`, DOM, Node APIs.
+- Values crossing JS↔C++ are plain JSON-like data: functions are dropped, cyclic references become `null`, very large values (~4M items) throw `RangeError`.
+- Errors: uncaught exceptions and unhandled rejections go to the plugin log (Settings › Plugins › Log, or the client's log.txt prefixed `Plugin <id>`); in dev mode a toast shows the first line.
+
+## Core rules (avoid the common bugs)
+
+1. Peer ids are STRINGS (`Peer.id`, 64-bit values don't fit a double). Every API taking a peer accepts a `Peer` object or its id string. `Peer.tgId` is the bare numeric Telegram id, for display only.
+2. Messages are addressed by `(peer, messageId)`; message ids are numbers.
+3. Message events (`message.new/edited/deleted`) fire for EVERY logged-in account; `dzg.*` calls act on the ACTIVE account. Check `message.selfId === dzg.users.self()?.id` before acting.
+4. Events are only dispatched to plugins that subscribed (`dzg.on`). `message.*`, `message.reaction`, `chat.typing`, `chat.unread`, `user.status`, `app.focus`, `compose.changed`, `wallet.changed`, `plugins.changed` arrive on the next event-loop iteration (outside client internals), so handlers may safely send/delete.
+5. Never react to your own outgoing messages unless intended (`message.out`), never auto-reply to bots/channels, rate-limit every automatic action, and guard against loops (a plugin's own `dzg.messages.send` does NOT go through `onBeforeSend` unless `runHooks: true`).
+6. `dzg.messages.addFilter` and `addRenderTransform` run during painting/layout: keep them pure and fast, no API calls, no UI. Results are cached per message; call `refilter()` / `refreshRender()` when your conditions change.
+7. `when()` / `title()` callbacks of menu items and top-bar buttons run while the client builds menus: no side effects.
+8. Async API calls return Promises that reject with `Error` ('400: PEER_ID_INVALID', 'TIMEOUT', ...). Sync lookups never throw for "not found": they return `null` / `false` / `[]`.
+9. `dzg.plugins.setEnabled/reload/...` from plugin code are applied after the current handler returns, never synchronously.
+10. UI text: the user base is Russian-speaking; keep UI strings short, no emoji decorations.
+
+## API map (all under the global `dzg`)
+
+Events: `dzg.on(name, fn) -> off()`, `dzg.off`, `dzg.once`.
+`ready`, `unload`, `session.ready (Peer)`, `message.new|edited|deleted (Message)`, `message.reaction (Message)`, `chat.opened (Peer)`, `chat.typing {chat, user, action, topicId}`, `chat.unread {chat, unread, unreadMark, mentions}`, `user.status {user, online, lastSeen, kind}`, `settings.changed {key, value}`, `theme.changed {night}`, `app.focus {active}`, `compose.changed {chat, text}`, `wallet.changed {stars, ton, ...}`, `plugins.changed {plugins}`.
+
+Info: `dzg.version` (2), `dzg.plugin {id, name, version, author, description, dir, dataDir}`, `dzg.app {name, version, apiVersion, platform, os, pluginsPath, devMode, language(), isNightMode(), setNightMode(b), restart()}`.
+
+Storage and settings: `dzg.storage.get(key, fallback) / set(key, value) / remove(key) / keys()`; `dzg.settings.get(key) / all() / set(key, value)`.
+
+Messages (`dzg.messages`):
+- `send(peer, text, {parse: 'markdown'|'html'|'none', replyTo, topicId, silent, scheduleDate, noWebpage, entities, runHooks}) -> boolean`
+- `edit(peer, id, text, {parse, noWebpage, entities}) -> boolean`, `delete(peer, ids, {revoke}) -> boolean`
+- `get(peer, id) -> Message|null` (memory), `loaded(peer, limit) -> Message[]` (memory)
+- `history(peer, {limit, offsetId, addOffset, offsetDate, minId, maxId}) -> Promise<Message[]>` (server, oldest first)
+- `iterate(peer, {limit, batch, offsetId}) -> AsyncGenerator<Message>` (newest first): `for await (const m of dzg.messages.iterate(chat, {limit: 5000})) { ... }`
+- `search(peer|null, query, {limit, from, filter, minDate, maxDate, ...}) -> Promise<Message[]>`, `fetch(peer, id|ids)`
+- `forward(fromPeer, ids, toPeer, {silent, dropAuthor, dropCaptions}) -> Promise`, `react(peer, id, emoji|null)`, `reactions(peer, id)`, `pin(peer, id, {silent, unpin, oneSide})`, `unpin`, `markRead(peer, {tillId})`
+- `sendFile(peer, path|paths, {caption, parse, asDocument, album, spoiler, replyTo, silent, scheduleDate}) -> boolean`, `download(peer, id, path?) -> Promise<string>`
+- `link(peer, id) -> string|null`, `clickButton(peer, id, row, column | text, {open}) -> Promise<{answer?, url?, alert?}>`
+- `parse(text, 'markdown'|'html') -> {text, entities}`, `format(message|{text, entities}, 'html'|'markdown')`
+- `addFilter(msg => boolean)` (true hides), `onBeforeSend(ctx => string | false | {text} | {cancel: true} | void)`, `addRenderTransform(msg => string|null)`, `refilter()`, `refreshRender()`
+
+Chats (`dzg.chats`): `current()`, `get(peer)`, `find(username)` (loaded only), `open(peer, messageId?)`, `list({folder, limit}) -> ChatListEntry[]`, `entry(peer)`, `folders()`, `resolve(username) -> Promise<Peer|null>` (server), `join(usernameOrInvite) -> Promise<Peer>`, `leave(peer)`, `mute(peer, seconds|true|false)`, `unmute`, `archive(peer, bool)`, `pin(peer, bool)`, `markUnread(peer, bool)`, `markRead(peer)`, `setTyping(peer, action)` (`typing`, `cancel`, `record_voice`, `upload_photo`, ... see `dzg.chats.typingActions`), `members(peer, {limit, query}) -> Promise<ChatMember[]>`, `info(peer) -> Promise<ChatInfo>`, `create({type, title, ...})`, `addMembers`, `kick(peer, user, {ban})`, `setTitle`, `setAbout`, `createInviteLink`, `clearHistory(peer, {revoke})`.
+
+Users (`dzg.users`): `self()`, `get(peer)`, `status(peer)`, `isBlocked(peer)`, `info(peer) -> Promise<UserInfo>`, `contacts()`, `block(peer, bool)`, `unblock`, `commonChats(peer)`, `addContact(peer, {...})`, `deleteContact(peer)`.
+Accounts (`dzg.accounts`): `list() -> {index, self, active}[]`, `current()`, `switchTo(index)`.
+Wallet (`dzg.wallet`): `get() -> {stars, ton, starsLoaded, tonLoaded}|null`, `setLocal({stars, ton})` (local display only), `refresh()`.
+
+Raw MTProto (`dzg.api`):
+- `call(method, params, {timeout, dc, floodSleep, applyResult}) -> Promise<TL>`; field names exactly as in `Telegram/SourceFiles/mtproto/scheme/api.tl`; constructors are objects with `_`: `{_: 'inputPeerSelf'}`; `long` = decimal string, `bytes` = base64 string, flags are computed from present optional fields; `random_id` / `hash` are filled automatically. Where InputPeer/InputUser/InputChannel is expected you may pass a Peer, a Message, an id string or `'me'`.
+- `inputPeer(peer)`, `inputUser(peer)`, `inputChannel(peer)`, `peerId(tlPeer) -> PeerId|null`
+- `onUpdate(type | type[] | '*', (update, meta) => {})` for raw `Update` objects (`updateUserTyping`, `updateNewMessage`, ...)
+- `schema(name)`, `constructors(type)`, `search(query)`, `encode(obj, type)`, `decode(data, type)`, `toBase64`, `fromBase64`, `layer`
+- Example: `const r = await dzg.api.call('messages.getHistory', {peer: chat, limit: 10, offset_id: 0, offset_date: 0, add_offset: 0, max_id: 0, min_id: 0}); r.messages.forEach(m => console.log(m._, m.message));`
+
+UI (`dzg.ui`):
+- `toast(text, title?)`, `alert(text, title?)`, `confirm(text, {title, confirmText, cancelText, danger}) -> Promise<boolean>`, `prompt(title, {text, placeholder, value, multiline}) -> Promise<string|null>`, `box({title, text, inputs:[{id, placeholder, value, multiline}], toggles:[{id, text, checked}], buttons:[{id, text, danger}]}) -> Promise<{button, values}>`
+- `notify({title, text, onClick, silent} | string)` (in-app notification)
+- `addMessageMenuItem({title: string | (msg => string), when?, onClick(msg)})`, `addChatMenuItem({title, when?, onClick(peer)})`, `addMainMenuItem({title, icon, onClick})`, `addTopBarButton({icon, text, tooltip, when?(chat), onClick(chat)})`, `addShortcut('Ctrl+Shift+K', fn)`, `icons()` (names usable as `icon`), `openLink(url)` (t.me / tg:// handled inside)
+- `compose.get() -> {chat, text}|null`, `compose.set(text)`, `compose.insert(text)`, `compose.focus()`, `compose.addButton({icon, text, tooltip, onClick(chat)})`
+- `panel({title, width}) -> Panel` (docked right; tabs when several): `addLabel(text, {bold, muted})`, `addButton(text, onClick, {style: 'light'})`, `addInput({placeholder, value, multiline, onSubmit, onChange})`, `addToggle(text, checked, onChange)`, `addSeparator()`, `addSkip(px)`, `clear()`, `setTitle()`, `close()`, `on('close', fn)`, `isOpen()`, `widget`
+- Widget tree: `mainWindow()`, `focused()`, `find(className, objectName) -> Widget[]` (real C++ class names, e.g. `HistoryView::TopBarWidget`, `Dialogs::InnerWidget`); `Widget`: `className()`, `classChain()`, `geometry()`, `setGeometry()`, `move`, `resize`, `show`, `hide`, `raise`, `setOpacity`, `childWidgets()`, `find()`, `childAt()`, `prop()`, `setProp()`, `text()`, `setText()`, `click(x, y)`, `typeText()`, `grab(path)` (PNG), `dump(depth)`, `destroy()`, `on(event, fn)`
+- `create('label'|'button'|'input'|'checkbox'|'panel', parent|null, {x, y, width, height, text, placeholder, color, radius, style, onClick, onChange, onSubmit}) -> Widget` (native Telegram look)
+- Theme: `dzg.theme.set(name, '#RRGGBB'[AA])`, `setMany({...})`, `get(name)`, `reset()` (removes only this plugin's colors; reapplied automatically after theme/night switches). Color names: `Telegram/lib_ui/ui/colors.palette` (e.g. `windowBg`, `windowBgActive`, `activeButtonBg`, `msgOutBg`, `dialogsBgActive`).
+
+Commands: `dzg.commands.register('name', {description, run({args, rest, text, chat, replyTo})})` — sending `/name ...` in any chat runs it and the message is NOT sent. `list()`, `all()`, `run('/name args', chat?)`.
+Network and files: `dzg.http.fetch(url, {method, headers, body, json, timeout}) -> Promise<{status, ok, headers, url, text(), json()}>` (text only, no CORS); `dzg.fs.read/write/list/exists` (relative paths = plugin folder; prefer `dzg.plugin.dataDir` for data); `dzg.clipboard.get/set`; `dzg.openUrl(url)`.
+Plugins: `dzg.plugins.list/get/setEnabled/enable/disable/reload/reloadAll/log/settings/setSetting/evaluate/inspect/install/promptInstall/uninstall/openManager/openDevTools`, `dzg.require(path)` (CommonJS).
+
+## Minimal example
+
+```js
+// main.js — mark every incoming message that mentions a keyword
+const word = () => String(dzg.settings.get('word') || '').toLowerCase();
+
+dzg.on('message.new', (m) => {
+  const self = dzg.users.self();
+  if (!self || m.selfId !== self.id || m.out || m.service || !word()) return;
+  if (m.text.toLowerCase().includes(word())) {
+    dzg.ui.notify({ title: m.chat.name, text: m.fromName + ': ' + m.text, onClick: () => dzg.chats.open(m.chat, m.id) });
+  }
+});
+
+dzg.commands.register('count', {
+  description: 'Count messages in this chat: /count 500',
+  async run({ args, chat }) {
+    const limit = Math.min(Number(args[0]) || 200, 5000);
+    let n = 0;
+    for await (const m of dzg.messages.iterate(chat, { limit })) if (!m.service) n++;
+    dzg.ui.toast(`${n} messages`, chat.name);
+  },
+});
+
+dzg.ui.addMessageMenuItem({
+  title: 'Copy as quote',
+  when: (m) => !!m.text,
+  onClick: (m) => dzg.clipboard.set(m.text.split('\n').map((l) => '> ' + l).join('\n')),
+});
+```
+
+## Testing without the client
+
+From the repo root (needs `out-qjs/qjs`, built from `Telegram/ThirdParty/quickjs-ng`):
+
+- `tools/damza/sandbox.py path/to/main.js [test.js] [--setup=setup.js]` runs the real prelude and every API module's JS against a mocked native bridge. In tests: `sandbox.event(name, data)`, `sandbox.dispatch(type, payload)`, `sandbox.settle(id, ok, value)`, `sandbox.runTimers()`, `sandbox.called(nativeName)`, `sandbox.native[name] = fn` (stub), `sandbox.returns[name] = value`, `sandbox.settings`, `sandbox.storage`, `sandbox.eq(a, b)`, `sandbox.assert(cond)`. Native names are module-prefixed (`messages_send`, `chats_list`, `wallet_setLocal`).
+- In the running client: Settings › Plugins › DevTools (JS console in a plugin's scope + live log), or `dzg.plugins.evaluate(id, code)`.
+- Typings for editors: `docs/plugins/types/index.d.ts` (`jsconfig.json`: `"include": ["**/*.js", "types/*.d.ts"]`; the client's "Create plugin" wizard copies them).
+
+## Working on the client itself (C++)
+
+- Plugin system sources: `Telegram/SourceFiles/damza/` (`plugins/plugin_*.{h,cpp}` core, `plugins/api/api_*.cpp` API modules registered with `DZG_API_MODULE`, `plugins/ui/` panels and buttons, `ui/` settings page, DevTools, install boxes). Read `docs/plugins/ARCHITECTURE.md` first.
+- New API module: copy `plugins/api/api_app.cpp` (natives prefixed with the module name + a JS fragment in `R"DZG_JS( ... )DZG_JS"` that extends `dzg`), add `docs/plugins/types/<module>.d.ts`, then run `python3 tools/damza/embed_types.py` and `python3 tools/damza/gen_reference.py`. New files under `damza/` are picked up by a CMake glob.
+- Verify C++ without a full build: `tools/damza/check.py <file.cpp>` (syntax-only with the real flags). Build: `cmake --build out --target Telegram` (Debug, Ninja). Run: `tools/damza/run-dev.sh`.
+- Built-in plugins live in `plugins/builtin/<id>/` (`"builtin": true`) and are embedded with `python3 tools/damza/embed_builtins.py`; tests: `python3 tools/damza/tests/builtins/run.py`. Example (non-built-in) plugins: `plugins/examples/`.
+- Repo rules: `AGENTS.md` (code style, no `Co-Authored-By` trailers). Keep hooks into upstream tdesktop/AyuGram files to one or two lines calling into `damza/`.
+
+## Docs
+
+- [Plugin docs overview](docs/plugins/README.md): quick start, manifest, lifecycle, JS environment, FAQ
+- [API reference](docs/plugins/reference.md): every `dzg.*` member, event and type (generated from the typings)
+- [Typings](docs/plugins/types/index.d.ts): TypeScript declarations, the ground truth for signatures
+- [Guides](docs/plugins/guide/): 01 first plugin, 02 events, 03 messages, 04 chats and users, 05 UI, 06 commands and hooks, 07 network and storage, 08 raw MTProto, 09 debugging, 10 publishing
+- [Module references](docs/plugins/api/): messages, chats, users, ui, mtproto, plugins, builtin
+- [Cookbook](docs/plugins/cookbook.md): 26 complete recipes
+- [Built-in plugins](docs/plugins/builtins.md), [Plugin manager](docs/plugins/manager.md), [Architecture](docs/plugins/ARCHITECTURE.md)
+
+## Optional
+
+- [Full API dump for agents](docs/plugins/llms-full.txt): this file + all typings + reference, in one text file
+- [Example plugins](plugins/examples/): hello, anti-ads, text-tools, ui-playground, ui-showcase, chat-tools, fake-balance
+
+
+# API reference (docs/plugins/reference.md)
+
+# Справочник API плагинов DamZaGram
+
+Полный список того, что есть у плагина: каждый метод, поле, событие и тип данных API версии 2. Справочник **собран автоматически** из [`types/*.d.ts`](types/index.d.ts) скриптом `tools/damza/gen_reference.py`, поэтому совпадает с подсказками VS Code. Объяснения и примеры — в [гайдах](README.md#гайды), [рецептах](cookbook.md) и страницах модулей `api/*.md`.
+
+Условные обозначения: `?` — необязательный параметр или поле; `PeerId | Peer` — можно передать id чата (строку) или сам объект; `Promise<T>` — асинхронный метод, используй `await`. Автор DamZaGram — [@wetakush](https://t.me/wetakush).
+
+## Содержание
+
+- [Глобальные функции](#глобальные-функции)
+- [`dzg`](#dzg)
+- [`dzg.plugin`](#dzgplugin)
+- [`dzg.app`](#dzgapp)
+- [`dzg.storage`](#dzgstorage)
+- [`dzg.settings`](#dzgsettings)
+- [`dzg.ui`](#dzgui)
+- [`dzg.ui.compose`](#dzguicompose)
+- [`dzg.theme`](#dzgtheme)
+- [`dzg.chats`](#dzgchats)
+- [`dzg.messages`](#dzgmessages)
+- [`dzg.commands`](#dzgcommands)
+- [`dzg.http`](#dzghttp)
+- [`dzg.fs`](#dzgfs)
+- [`dzg.clipboard`](#dzgclipboard)
+- [`dzg.users`](#dzgusers)
+- [`dzg.accounts`](#dzgaccounts)
+- [`dzg.api`](#dzgapi)
+- [`dzg.plugins`](#dzgplugins)
+- [`dzg.builtin`](#dzgbuiltin)
+- [`dzg.wallet`](#dzgwallet)
+- [События](#события)
+- [Типы данных](#типы-данных)
+- [Псевдонимы типов](#псевдонимы-типов)
+
+## Глобальные функции
+
+Есть в любом плагине без импорта, как в браузере.
+
+- `console.log(...args: unknown[]): void` — Строка в лог плагина (уровень info).
+- `console.info(...args: unknown[]): void` — То же, что log.
+- `console.debug(...args: unknown[]): void` — Отладочная строка.
+- `console.warn(...args: unknown[]): void` — Предупреждение.
+- `console.error(...args: unknown[]): void` — Ошибка: в режиме разработчика ещё и тост.
+- `setTimeout(fn: (...args: any[]) => void, ms?: number, ...args: any[]): number` — Вызвать fn через ms миллисекунд. Возвращает id таймера.
+- `setInterval(fn: (...args: any[]) => void, ms?: number, ...args: any[]): number` — Вызывать fn каждые ms миллисекунд.
+- `clearTimeout(id: number): void` — Отменить setTimeout.
+- `clearInterval(id: number): void` — Отменить setInterval.
+- `queueMicrotask(fn: () => void): void` — Выполнить fn сразу после текущего кода (микрозадача).
+- `globalThis`, `Promise`, `Map`, `Set`, `BigInt`, `atob`/`btoa`, `performance.now()` — стандартная библиотека ES2023 (QuickJS-ng). `Intl`, `TextEncoder`, `fetch`, `structuredClone` нет — см. [окружение JS](README.md#окружение-javascript).
+
+## `dzg`
+
+Тип `Dzg`. Гайд: [guide/01-first-plugin.md](guide/01-first-plugin.md).
+
+- `readonly version: 2` — Версия API плагинов (2).
+- [`dzg.plugin`](#dzgplugin) — Информация о плагине.
+- [`dzg.app`](#dzgapp) — Информация о клиенте и модуль app.
+- `on<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void` — Подписаться на событие; возвращает функцию отписки. Клиент присылает плагину только события, на которые есть обработчик. События сообщений, реакций, статусов, «печатает…», непрочитанных, фокуса, поля ввода и plugins.changed приходят на следующей итерации цикла событий; ready, unload, session.ready, chat.opened, settings.changed и theme.changed — сразу. Каждый вызов обработчика должен уложиться в 3 секунды.
+- `off<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): void` — Отписать обработчик.
+- `once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void` — Подписаться на одно срабатывание.
+- `log(...args: unknown[]): void` — То же, что console.log.
+- `require<T = any>(path: string): T` — CommonJS-модуль из папки плагина: `module.exports` файла, путь от папки плагина. Модуль выполняется один раз и кешируется. В ES-модулях удобнее `import`.
+- [`dzg.storage`](#dzgstorage) — Постоянное хранилище плагина: `tdata/plugins_data/<id>.json`.
+- [`dzg.settings`](#dzgsettings) — Настройки плагина из схемы `settings` в manifest.json.
+- [`dzg.ui`](#dzgui) — Интерфейс: тосты, окна, меню, кнопки, панели, виджеты.
+- [`dzg.theme`](#dzgtheme) — Цвета палитры на лету.
+- [`dzg.chats`](#dzgchats) — Чаты, папки, участники.
+- [`dzg.messages`](#dzgmessages) — Сообщения: отправка, история, поиск, фильтры, хуки.
+- [`dzg.commands`](#dzgcommands) — Слеш-команды.
+- [`dzg.http`](#dzghttp) — HTTP-запросы.
+- [`dzg.fs`](#dzgfs) — Файлы.
+- [`dzg.clipboard`](#dzgclipboard) — Буфер обмена.
+- `openUrl(url: string): void` — Открыть ссылку в браузере ОС.
+- [`dzg.users`](#dzgusers) — Пользователи и контакты.
+- [`dzg.accounts`](#dzgaccounts) — Аккаунты, в которые выполнен вход.
+- [`dzg.api`](#dzgapi) — Сырой MTProto: любой метод Telegram API.
+- [`dzg.plugins`](#dzgplugins) — Управление плагинами.
+- [`dzg.builtin`](#dzgbuiltin) — Встроенные плагины.
+- [`dzg.wallet`](#dzgwallet) — Балансы Stars и TON.
+
+## `dzg.plugin`
+
+Тип `PluginInfo`. Гайд: [README.md](README.md#анатомия-плагина).
+
+- `id: string` — id плагина из manifest.json.
+- `name: string` — Название плагина.
+- `version: string` — Версия плагина.
+- `author: string` — Автор плагина.
+- `description: string` — Описание плагина.
+- `dir: string` — Папка плагина (с завершающим слешем не гарантируется).
+- `dataDir: string` — Папка для данных плагинов, с завершающим слешем.
+
+## `dzg.app`
+
+Тип `AppInfo`. Гайд: [guide/05-ui.md](guide/05-ui.md#тема-и-ночной-режим).
+
+- `name: 'DamZaGram'` — Всегда 'DamZaGram'.
+- `version: string` — Версия клиента, например '5.16.4'.
+- `apiVersion: number` — Версия API плагинов (2).
+- `platform: string` — Платформа Qt: 'windows', 'macos', 'arch', 'ubuntu'...
+- `os: string` — Название ОС для людей.
+- `pluginsPath: string` — Папка плагинов, с завершающим слешем.
+- `devMode: boolean` — Включена горячая перезагрузка (режим разработчика): ошибки плагинов показываются тостом.
+- `language(): AppLanguage` — Текущий язык интерфейса.
+- `isNightMode(): boolean` — Включён ли ночной режим (тёмная тема).
+- `setNightMode(night: boolean): void` — Включить или выключить ночной режим. Переключение происходит чуть позже (после текущего обработчика), затем приходит 'theme.changed'.
+- `restart(): void` — Перезапустить клиент.
+
+## `dzg.storage`
+
+Тип `DzgStorage`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#хранилище-dzgstorage).
+
+- `get<T = unknown>(key: string, fallback?: T): T` — Значение по ключу или fallback.
+- `set(key: string, value: unknown): void` — Записать значение, сразу сохраняется на диск. Значение должно сериализоваться в JSON. Циклическая ссылка сохранится как null; слишком большое значение (около 4 млн элементов) — RangeError.
+- `remove(key: string): void` — Удалить ключ.
+- `keys(): string[]` — Все ключи.
+
+## `dzg.settings`
+
+Тип `DzgSettings`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#настройки-dzgsettings).
+
+- `get<T = unknown>(key: string): T` — Значение настройки (или default из схемы).
+- `all(): Record<string, unknown>` — Все настройки объектом.
+- `set(key: string, value: unknown): void` — Записать настройку (сохраняется, приходит settings.changed).
+
+## `dzg.ui`
+
+Тип `DzgUi`. Гайд: [guide/05-ui.md](guide/05-ui.md), подробно: [api/ui.md](api/ui.md).
+
+- `toast(text: string, title?: string): void` — Короткое всплывающее сообщение внизу окна.
+- `box(spec: BoxSpec): Promise<BoxResult>` — Окно с полями, чекбоксами и кнопками.
+- `alert(text: string, title?: string): Promise<void>` — Окно с текстом и кнопкой OK.
+- `confirm(text: string, options?: { title?: string; confirmText?: string; cancelText?: string; danger?: boolean }): Promise<boolean>` — Окно «Да / Отмена». true, если нажали кнопку подтверждения. danger — красная кнопка.
+- `prompt(title: string, options?: { text?: string; placeholder?: string; value?: string; multiline?: boolean; confirmText?: string; cancelText?: string }): Promise<string | null>` — Окно с полем ввода. null, если пользователь отменил.
+- `addMessageMenuItem(item: MenuItem<Message>): () => void` — Пункт в контекстном меню сообщения. Возвращает функцию, которая убирает пункт.
+- `addChatMenuItem(item: MenuItem<Peer>): () => void` — Пункт в контекстном меню чата (список чатов и шапка). Возвращает функцию, которая убирает пункт.
+- `mainWindow(): Widget | null` — Корневой виджет главного окна.
+- `focused(): Widget | null` — Виджет с фокусом клавиатуры.
+- `find(className?: string, name?: string): Widget[]` — Найти виджеты по C++ классу и objectName. Поиск по всем окнам приложения.
+- `create(type: WidgetType, parent: Widget | null, props?: CreateProps): Widget | null` — Создать свой виджет: label, button, input, checkbox, panel. parent: null — главное окно.
+- `repaint(): void` — Перерисовать все окна клиента.
+- `icons(): DzgIconName[]` — Имена иконок для опции icon.
+- `addTopBarButton(spec: TopBarButtonSpec): () => void` — Кнопка в шапке чата. Возвращает функцию, которая её убирает.
+- `addMainMenuItem(spec: MainMenuItemSpec): () => void` — Пункт главного меню (☰). Возвращает функцию, которая его убирает.
+- `addShortcut(keys: string, handler: () => void): () => void` — Горячая клавиша на всё приложение, синтаксис Qt: 'Ctrl+Shift+K', 'Alt+F1', 'F8'. Только одно сочетание (без аккордов 'Ctrl+Shift+K, Ctrl+C') — иначе исключение. Без Ctrl/Alt/Meta и не F-клавиша — не срабатывает, пока фокус в текстовом поле. Сочетание плагина важнее сочетаний клиента.
+- `notify(spec: NotifySpec | string): void` — Уведомление поверх окна клиента. Строка — то же, что { text }.
+- `openLink(url: string): void` — Ссылка через клиент: t.me/..., tg://..., обычные — в браузере.
+- `refreshButtons(): void` — Пересчитать when() у кнопок в шапке, если условие изменилось.
+- [`dzg.ui.compose`](#dzguicompose) — Поле ввода сообщения.
+- `panel(options?: PanelOptions): Panel` — Открыть (или вернуть уже открытую) боковую панель плагина.
+
+## `dzg.ui.compose`
+
+Тип `DzgCompose`. Гайд: [guide/05-ui.md](guide/05-ui.md#поле-ввода), подробно: [api/ui.md](api/ui.md#поле-ввода).
+
+- `get(): ComposeState | null` — Текущее поле ввода: в фокусе, иначе последнее, где был фокус, в активном окне. null — поля нет.
+- `set(text: string): boolean` — Заменить весь текст поля. Курсор — в конец. false — поля нет.
+- `insert(text: string): boolean` — Вставить текст в позицию курсора (заменяет выделение).
+- `focus(): void` — Активировать окно и поставить фокус в поле.
+- `addButton(spec: ComposeButtonSpec): () => void` — Кнопка рядом с полем ввода во всех чатах, темах и ответах.
+
+## `dzg.theme`
+
+Тип `DzgTheme`. Гайд: [guide/05-ui.md](guide/05-ui.md#тема-и-ночной-режим).
+
+- `set(name: string, color: string): boolean` — Имя цвета палитры Telegram (windowBg, msgOutBg, ...). Цвет: #RRGGBB или #AARRGGBB.
+- `setMany(colors: Record<string, string>): boolean` — Поменять несколько цветов сразу: { windowBg: '#101010', ... }.
+- `reset(): void` — Убрать цвета, заданные этим плагином. Цвета других плагинов остаются. Вызывается сам при выгрузке.
+- `get(name: string): string | null` — Текущий цвет палитры: '#rrggbb' или '#aarrggbb'; null для неизвестного имени.
+
+## `dzg.chats`
+
+Тип `DzgChats`. Гайд: [guide/04-chats-and-users.md](guide/04-chats-and-users.md), подробно: [api/chats.md](api/chats.md).
+
+- `current(): Peer | null` — Открытый сейчас чат или null.
+- `get(peerId: PeerId | Peer): Peer | null` — Peer по id или null.
+- `find(username: string): Peer | null` — Чат по юзернейму. Ищет только среди уже загруженных клиентом чатов.
+- `open(peerId: PeerId | Peer, messageId?: number): boolean` — Открыть чат (и прокрутить к сообщению).
+- `readonly typingActions: readonly TypingAction[]` — Все действия, которые принимает setTyping.
+- `list(options?: ChatListOptions): ChatListEntry[]` — Чаты, которые клиент уже загрузил, в том порядке, как в списке слева (закреплённые сверху). Запросов к серверу нет.
+- `entry(peer: PeerId | Peer): ChatListEntry | null` — Состояние одного чата: счётчики, mute, архив. null, если чат неизвестен.
+- `folders(): ChatFolder[]` — Папки чатов пользователя (без «Все чаты»).
+- `resolve(username: string): Promise<Peer | null>` — Найти чат или пользователя на сервере. Понимает 'durov', '@durov', 't.me/durov', 'tg://resolve?domain=durov' и номера телефонов ('+79991234567'). null, если никого нет.
+- `join(usernameOrInviteLink: string | Peer): Promise<Peer>` — Вступить в группу или канал по юзернейму, ссылке t.me/... или приглашению (t.me/+hash, t.me/joinchat/hash, tg://join?invite=hash). Можно передать и Peer уже известного канала. Если ты уже участник — просто вернёт чат. Ошибки — коды сервера: 'INVITE_HASH_EXPIRED', 'INVITE_REQUEST_SENT', 'CHANNELS_TOO_MUCH', 'JOIN_VERIFICATION_REQUIRED' и т.п.
+- `leave(peer: PeerId | Peer): Promise<void>` — Выйти из группы или канала. История чата не удаляется.
+- `mute(peer: PeerId | Peer, seconds?: number | boolean): boolean` — Выключить уведомления. seconds: число секунд; true, 0 или не задано — навсегда; false — включить обратно.
+- `unmute(peer: PeerId | Peer): boolean` — То же, что mute(peer, false).
+- `archive(peer: PeerId | Peer, archived?: boolean): boolean` — Переместить в архив (по умолчанию) или вернуть из него.
+- `pin(peer: PeerId | Peer, pinned?: boolean, options?: { folder?: number }): boolean` — Закрепить или открепить чат. По умолчанию в основном списке, { folder } — в папке. При превышении лимита клиент покажет своё окно. false, если нет открытого окна аккаунта.
+- `markUnread(peer: PeerId | Peer, unread?: boolean): boolean` — true — пометить непрочитанным, false — прочитать всё.
+- `markRead(peer: PeerId | Peer): boolean` — Прочитать все сообщения чата (то же, что markUnread(peer, false)).
+- `setTyping(peer: PeerId | Peer, action?: TypingAction, options?: { topicId?: number }): boolean` — Показать собеседникам статус «печатает…» и т.п. Один вызов держит статус около 5 секунд, для долгого статуса повторяй раз в 4–5 секунд. 'cancel' снимает статус. Уважает режим призрака AyuGram. Неизвестное действие бросает TypeError.
+- `members(peer: PeerId | Peer, options?: ChatMembersOptions): Promise<ChatMember[]>` — Участники группы или канала с сервера (в канале нужны права админа).
+- `info(peer: PeerId | Peer): Promise<ChatInfo>` — Полная информация о чате, канале или пользователе с сервера.
+- `create(options: ChatCreateOptions | string): Promise<Peer>` — Создать группу, супергруппу или канал. Строка — название обычной группы.
+- `addMembers(peer: PeerId | Peer, users: PeerId | Peer | (PeerId | Peer)[]): Promise<{ added: number; missing: PeerId[] }>` — Пригласить пользователей. missing — id тех, кого пригласить не вышло (запретили приглашать себя в настройках приватности и т.п.).
+- `kick(peer: PeerId | Peer, user: PeerId | Peer, options?: { ban?: boolean }): Promise<void>` — Удалить участника. { ban: true } — ещё и заблокировать в чате (только супергруппы и каналы).
+- `setTitle(peer: PeerId | Peer, title: string): Promise<void>` — Переименовать группу или канал.
+- `setAbout(peer: PeerId | Peer, about: string): Promise<void>` — Поменять описание группы или канала.
+- `createInviteLink(peer: PeerId | Peer, options?: InviteLinkOptions): Promise<string>` — Создать новую ссылку-приглашение. Возвращает ссылку.
+- `clearHistory(peer: PeerId | Peer, options?: { revoke?: boolean }): boolean` — Очистить историю. { revoke: true } — удалить и у собеседника (где это возможно).
+
+## `dzg.messages`
+
+Тип `DzgMessages`. Гайд: [guide/03-messages.md](guide/03-messages.md), подробно: [api/messages.md](api/messages.md).
+
+- `delete(peerId: PeerId | Peer, ids: number | number[], options?: { revoke?: boolean }): boolean` — Удалить сообщения (revoke: true — и у собеседника). Локально удаляет сразу после текущего обработчика, а не внутри вызова.
+- `get(peerId: PeerId | Peer, messageId: number): Message | null` — Сообщение из памяти клиента или null.
+- `loaded(peerId: PeerId | Peer, limit?: number): Message[]` — Сообщения из памяти клиента. Последние сообщения, которые клиент уже загрузил в память. Запросов к серверу нет.
+- `addFilter(filter: (message: Message) => boolean): () => void` — Скрыть сообщения из ленты. Вернуть true — скрыть сообщение. Вызывается часто: фильтр должен быть быстрым.
+- `onBeforeSend(hook: BeforeSendHook): () => void` — Хук перед отправкой: переписать или отменить исходящее сообщение. Возвращает функцию отписки.
+- `refilter(): void` — Пересчитать фильтры, например после смены настроек.
+- `send(peer: PeerId | Peer, text: string, options?: MessagesSendOptions): boolean` — Отправить текст (с Markdown/HTML, ответом, отложенно...). true — сообщение принято к отправке.
+- `edit(peer: PeerId | Peer, messageId: number, text: string, options?: MessagesEditOptions): boolean` — Изменить текст. Возвращает false, если сообщение не найдено, ещё не отправлено или это предложенный пост, ждущий ответа.
+- `parse(text: string, mode?: TextParseMode): FormattedText` — Разобрать Markdown (по умолчанию) или HTML в текст и форматирование.
+- `format(message: FormattedText | Message, mode?: 'html' | 'markdown' | 'md'): string` — Обратно: текст и форматирование в HTML (по умолчанию) или Markdown.
+- `format(text: string, mode: 'html' | 'markdown' | 'md', entities: MessageEntity[]): string` — вариант вызова.
+- `history(peer: PeerId | Peer, options?: MessagesHistoryOptions): Promise<Message[]>` — История с сервера, от старых к новым.
+- `iterate(peer: PeerId | Peer, options?: MessagesIterateOptions): AsyncGenerator<Message, void, void>` — Вся история страницами, от новых к старым: for await (const m of dzg.messages.iterate(chat)).
+- `search(peer: PeerId | Peer | null, query: string, options?: MessagesSearchOptions): Promise<Message[]>` — Поиск в чате или по всем чатам (peer = null). Результат от старых к новым.
+- `fetch(peer: PeerId | Peer, messageId: number): Promise<Message | null>` — Сообщение с сервера, даже если клиент его не загружал.
+- `fetch(peer: PeerId | Peer, messageIds: number[]): Promise<Message[]>` — вариант вызова.
+- `forward(fromPeer: PeerId | Peer, ids: number | Message | (number | Message)[], toPeer: PeerId | Peer, options?: MessagesForwardOptions): Promise<void>` — Переслать одно или несколько сообщений в другой чат. Служебные (и звонки) и неотправленные пропускаются; если переслать нечего — MESSAGE_NOT_FORWARDABLE.
+- `react(peer: PeerId | Peer, messageId: number, emoji: string | null, options?: { addToRecent?: boolean }): Promise<void>` — Поставить реакцию. null — убрать свои реакции. Премиум-эмодзи — строкой с id.
+- `reactions(peer: PeerId | Peer, messageId: number): string[]` — Реакции, которые можно поставить на сообщение (если оно загружено).
+- `pin(peer: PeerId | Peer, messageId: number, options?: { silent?: boolean; unpin?: boolean; oneSide?: boolean }): Promise<void>` — Закрепить сообщение ({ unpin: true } — открепить).
+- `unpin(peer: PeerId | Peer, messageId: number): Promise<void>` — Открепить сообщение.
+- `markRead(peer: PeerId | Peer, options?: { tillId?: number }): boolean` — Прочитать чат (до конца или до tillId). Учитывает режим призрака AyuGram.
+- `sendFile(peer: PeerId | Peer, path: string | string[], options?: MessagesSendFileOptions): boolean` — Отправить файл или несколько файлов (пути относительно папки плагина или абсолютные).
+- `download(peer: PeerId | Peer, messageId: number, path?: string): Promise<string>` — Скачать файл или фото из сообщения. Без path — в папку загрузок клиента. Можно передать папку.
+- `link(peer: PeerId | Peer, messageId: number, options?: { thread?: boolean; private?: boolean }): string | null` — Ссылка на сообщение (t.me/...). null для личных чатов и обычных групп.
+- `clickButton(peer: PeerId | Peer, messageId: number, row: number, column: number, options?: { open?: boolean }): Promise<MessagesButtonAnswer>` — Нажать кнопку бота по позиции (строка, столбец) или по тексту.
+- `clickButton(peer: PeerId | Peer, messageId: number, text: string, options?: { open?: boolean }): Promise<MessagesButtonAnswer>` — вариант вызова.
+- `addRenderTransform(transform: RenderTransform): () => void` — Подменить текст сообщений при отрисовке. Результат кешируется для каждого сообщения, функция вызывается снова, когда текст меняется или когда трансформации добавляются/убираются.
+- `refreshRender(): void` — Сбросить кеш и перерисовать: например, после смены настроек плагина.
+
+## `dzg.commands`
+
+Тип `DzgCommands`. Гайд: [guide/06-commands-and-hooks.md](guide/06-commands-and-hooks.md), подробно: [api/builtin.md](api/builtin.md).
+
+- `register(name: string, spec: CommandSpec | CommandSpec['run']): () => void` — Зарегистрировать слеш-команду. Команда срабатывает, когда пользователь отправляет "/name ...". Сообщение не уходит.
+- `list(): { name: string; description: string }[]` — Команды этого плагина.
+- `all(): PluginCommandInfo[]` — Команды всех загруженных плагинов, включая свои.
+- `run(text: string, chat?: Peer | PeerId): boolean` — Выполнить команду любого плагина так, будто пользователь отправил её в чат. text: '/stats 500' или 'stats 500'. chat: чат-контекст, по умолчанию текущий. false — такой команды нет или её плагин сейчас занят.
+
+## `dzg.http`
+
+Тип `DzgHttp`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#http).
+
+- `fetch(url: string, options?: FetchOptions): Promise<FetchResponse>` — HTTP-запрос. Промис отклоняется только при сетевой ошибке; 404 и 500 — обычный ответ с ok = false.
+
+## `dzg.fs`
+
+Тип `DzgFs`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#файлы-dzgfs).
+
+- `read(path: string): string | null` — null, если файла нет. Относительный путь — от папки плагина.
+- `write(path: string, text: string): boolean` — Записать текст в UTF-8, создав папки. Запись в папку своего плагина не вызывает горячую перезагрузку, но данные лучше держать в dzg.plugin.dataDir.
+- `list(path: string): string[]` — Имена файлов и папок внутри папки.
+- `exists(path: string): boolean` — Есть ли файл или папка.
+
+## `dzg.clipboard`
+
+Тип `DzgClipboard`. Гайд: [guide/07-network-and-storage.md](guide/07-network-and-storage.md#буфер-обмена-и-ссылки).
+
+- `get(): string` — Текст из буфера обмена.
+- `set(text: string): void` — Положить текст в буфер обмена.
+
+## `dzg.users`
+
+Тип `DzgUsers`. Гайд: [guide/04-chats-and-users.md](guide/04-chats-and-users.md#пользователи), подробно: [api/users.md](api/users.md).
+
+- `self(): Peer | null` — Ты сам (активный аккаунт). null до входа в аккаунт.
+- `get(peer: PeerId | Peer): Peer | null` — Peer по id. То же, что dzg.chats.get.
+- `status(peer: PeerId | Peer): UserStatus | null` — Текущий статус из памяти клиента, без запроса. null, если это не пользователь.
+- `isBlocked(peer: PeerId | Peer): boolean` — Заблокирован ли пользователь (по данным клиента).
+- `info(peer: PeerId | Peer): Promise<UserInfo>` — Полная информация с сервера (users.getFullUser).
+- `contacts(): Peer[]` — Контакты, которые загрузил клиент.
+- `block(peer: PeerId | Peer, blocked?: boolean): Promise<void>` — Заблокировать (по умолчанию) или разблокировать.
+- `unblock(peer: PeerId | Peer): Promise<void>` — То же, что block(peer, false).
+- `commonChats(peer: PeerId | Peer, options?: { limit?: number }): Promise<Peer[]>` — Общие группы и каналы, до 100.
+- `addContact(peer: PeerId | Peer, options?: { firstName?: string; lastName?: string; phone?: string; sharePhone?: boolean }): Promise<void>` — Добавить в контакты или переименовать контакт. Пустые поля берутся из профиля. sharePhone — показать этому человеку свой номер.
+- `deleteContact(peer: PeerId | Peer): Promise<void>` — Удалить из контактов.
+
+## `dzg.accounts`
+
+Тип `DzgAccounts`. Гайд: [guide/04-chats-and-users.md](guide/04-chats-and-users.md#несколько-аккаунтов), подробно: [api/users.md](api/users.md#dzgaccounts).
+
+- `list(): AccountEntry[]` — Аккаунты, в которые выполнен вход.
+- `current(): AccountEntry | null` — Активный аккаунт.
+- `switchTo(index: number | AccountEntry): boolean` — Переключиться на аккаунт. Переключение происходит чуть позже, после него придёт событие 'session.ready' (если аккаунт открыт впервые) и API начнёт работать с новым аккаунтом. false, если аккаунта с таким index нет.
+
+## `dzg.api`
+
+Тип `DzgApi`. Гайд: [guide/08-raw-mtproto.md](guide/08-raw-mtproto.md), подробно: [api/mtproto.md](api/mtproto.md).
+
+- `call<T = any>(method: string, params?: Record<string, any>, options?: ApiCallOptions): Promise<T>` — Вызывает любой метод Telegram API: `dzg.api.call('messages.getHistory', {...})`. Поля — как в api.tl; `random_id` и `hash` можно не передавать — подставятся сами (случайный id и 0). Там, где ждут InputPeer / InputUser / InputChannel, можно передать Peer, Message, id чата или 'me'. Промис отклоняется с ApiError ('400: PEER_ID_INVALID').
+- `inputPeer(peer: TLInputPeerLike): TLObject | null` — InputPeer для чата по известному клиенту access_hash; null, если клиент его не знает.
+- `inputUser(peer: TLInputPeerLike): TLObject | null` — InputUser; null, если это не пользователь или он неизвестен. 'me' -> inputUserSelf.
+- `inputChannel(peer: TLInputPeerLike): TLObject | null` — InputChannel; null, если это не канал / супергруппа.
+- `peerId(peer: TLObject | null | undefined): PeerId | null` — TL-peer -> id чата DamZaGram (PeerId) для dzg.chats.get / dzg.messages и т. п. Понимает peerUser / peerChat / peerChannel, inputPeer*, inputUser, inputChannel, а также объекты user / chat / channel из ответов. null для остального.
+- `onUpdate(type: string | string[] | '*', fn: (update: TLObject, meta: ApiUpdateMeta) => void): () => void` — Сырые обновления от сервера (объекты типа Update): 'updateUserTyping', 'updateNewMessage'... '*' — все. Можно передать массив типов. Бросает TypeError для неизвестного типа или не-Update (например 'updateShortMessage'). Возвращает функцию отписки.
+- `schema(name: string): TLSchemaInfo | null` — Описание метода или конструктора из схемы; принимает и id ('0x4423e6c5'). null, если не найден.
+- `constructors(type: string): string[]` — Имена конструкторов типа: constructors('InputPeer') -> ['inputPeerEmpty', 'inputPeerSelf', ...].
+- `search(query: string, limit?: number): string[]` — Поиск по именам методов и конструкторов (без учёта регистра).
+- `encode(value: any, type?: string): string` — TL-объект -> base64 его бинарного представления. type по умолчанию 'Object' (любой конструктор). Бросает Error.
+- `decode(data: string | Uint8Array | ArrayBuffer | number[], type?: string): any` — base64 / байты -> TL-объект. type: 'Object', `'Vector<long>'`, 'Message'... Бросает Error.
+- `toBase64(data: string | Uint8Array | ArrayBuffer | number[]): string` — Байты или строка (как UTF-8) -> base64.
+- `fromBase64(base64: string): Uint8Array` — base64 (и base64url) -> байты, или строка при as = 'text'.
+- `fromBase64(base64: string, as: 'text'): string` — вариант вызова.
+- `readonly layer: number` — Слой (layer) схемы, на котором работает клиент.
+
+## `dzg.plugins`
+
+Тип `DzgPlugins`. Гайд: [guide/10-publishing.md](guide/10-publishing.md), подробно: [api/plugins.md](api/plugins.md).
+
+- `readonly path: string` — Папка плагинов: `<папка данных>/tdata/plugins/`.
+- `list(): InstalledPlugin[]` — Все установленные плагины, включая выключенные.
+- `get(id?: string): InstalledPlugin | null` — Плагин по id (по умолчанию — текущий) или null.
+- `setEnabled(id: string, enabled: boolean): boolean` — Включить или выключить плагин. Применяется сразу после текущего обработчика (не синхронно): менеджер не грузит и не выгружает плагины, пока на стеке JS любого плагина. false — нет такого плагина.
+- `enable(id: string): boolean` — То же, что setEnabled(id, true).
+- `disable(id: string): boolean` — То же, что setEnabled(id, false).
+- `reload(id?: string): boolean` — Перезагрузить плагин (по умолчанию — текущий) после текущего обработчика.
+- `reloadAll(): boolean` — Перечитать папку плагинов и перезапустить все плагины (после текущего обработчика).
+- `log(id?: string, limit?: number): string[]` — Последние строки лога плагина (по умолчанию 100). Пусто, если не загружен.
+- `settings(id?: string): Record<string, unknown>` — Текущие значения настроек плагина (с учётом значений по умолчанию).
+- `setSetting(id: string, key: string, value: unknown): boolean` — Поменять настройку другого плагина; он получит событие settings.changed.
+- `evaluate(id: string, code: string): string` — Выполнить код в глобальной области другого загруженного плагина. Возвращает результат текстом (JSON, если получается), бросает Error.
+- `inspect(source: string): Promise<PluginPackageInfo>` — Прочитать пакет по ссылке или пути без установки. Принимает https-ссылки на .zip/.js, страницы файлов и репозитории GitHub, file:// и абсолютные пути (папка, .zip, .js).
+- `install(source: string, options?: { enable?: boolean }): Promise<string>` — Тихо установить или обновить плагин (без окна подтверждения) и вернуть его id. Новый плагин ставится без перезапуска остальных; обновление перезапускает только обновлённый плагин (если это вызвавший плагин, промис не дождётся ответа). Для магазинов плагинов удобнее promptInstall.
+- `promptInstall(source: string): Promise<void>` — Скачать пакет и показать пользователю окно установки (манифест, предупреждение о полном доступе). Промис выполняется, когда окно показано.
+- `uninstall(id: string, options?: { removeData?: boolean }): Promise<void>` — Удалить плагин; остальные продолжают работать. Встроенные только выключаются. removeData: стереть storage и забыть настройки и состояние.
+- `openManager(): void` — Открыть раздел «Плагины» в настройках.
+- `openDevTools(id?: string): void` — Открыть окно DevTools (консоль + живой лог) для плагина.
+
+## `dzg.builtin`
+
+Тип `DzgBuiltin`. Подробно: [api/builtin.md](api/builtin.md).
+
+- `list(): BuiltinPluginInfo[]` — Встроенные плагины и их состояние после установки на старте.
+
+## `dzg.wallet`
+
+Тип `DzgWallet`.
+
+- `get(): WalletBalances | null` — Текущие балансы; null — нет активного аккаунта.
+- `setLocal(values: { stars?: number; ton?: number }): boolean` — Поменять баланс только в этом клиенте (визуально). На сервере ничего не меняется: следующее обновление с сервера или refresh() вернёт настоящий баланс, после него придёт 'wallet.changed'. Отрицательные и нечисловые значения — RangeError.
+- `refresh(): boolean` — Перезапросить настоящие балансы с сервера.
+
+## События
+
+Подписка: `dzg.on(name, (data) => { ... })`, отписка — функция, которую вернул `on`. Подробно: [гайд по событиям](guide/02-events.md).
+
+- `ready` → `void` — Плагин загружен и готов. Срабатывает и после горячей перезагрузки.
+- `unload` → `void` — Плагин выгружается: выключен, перезагружен или клиент закрывается (окна и аккаунты ещё доступны). Регистрации, таймеры и цвета dzg.theme клиент уберёт сам.
+- `session.ready` → `Peer` — Аккаунт авторизован и его данные доступны.
+- `message.new` → `Message` — Новое сообщение (входящее или исходящее) появилось в любом чате любого аккаунта (см. Message.selfId). Приходит на следующей итерации цикла событий, а не внутри уведомления клиента.
+- `message.edited` → `Message` — Сообщение изменилось. Приходит на следующей итерации цикла событий.
+- `message.deleted` → `Message` — Сервер сообщил об удалении. Данные — снимок на момент удаления, сам обработчик вызывается на следующей итерации: без сохранения удалённых AyuGram dzg.messages.get его уже может не найти.
+- `chat.opened` → `Peer` — Пользователь открыл чат.
+- `settings.changed` → `{ key: string; value: unknown }` — Пользователь поменял настройку плагина в окне настроек.
+- `theme.changed` → `{ night: boolean }` — Сменилась палитра: включили или выключили ночной режим, применили другую тему. Цвета плагинов (dzg.theme) клиент сам наложит на новую палитру на следующей итерации цикла событий.
+- `message.reaction` → `Message` — Кто-то поставил реакцию на твоё сообщение (новая непрочитанная реакция). Приходит на следующей итерации цикла событий.
+- `chat.typing` → `{ chat: Peer; user: Peer; action: TypingAction; topicId: number }` — Кто-то печатает, записывает голосовое, выбирает стикер... Повторы одного действия приходят не чаще раза в 4 секунды. Когда действие закончилось (явно или по таймауту ~6.5 с), приходит action 'cancel'. Только для активного аккаунта.
+- `chat.unread` → `{ chat: Peer; unread: number; unreadMark: boolean; mentions: number }` — Изменилось число непрочитанных в чате или пометка «непрочитано». Изменения собираются пачкой за 300 мс, одинаковые значения не повторяются.
+- `user.status` → `{ user: Peer; online: boolean; lastSeen: number; kind: UserStatusKind }` — Пользователь появился в сети или вышел из неё (только активный аккаунт). Повторные одинаковые статусы отбрасываются. Первые 15 секунд после входа в аккаунт приходят только изменения уже известных статусов, чтобы загрузка списка чатов не завалила плагин событиями.
+- `app.focus` → `{ active: boolean }` — Окно клиента стало активным или неактивным.
+- `compose.changed` → `{ chat: Peer | null; text: string }` — Текст в поле ввода изменился. Не чаще раза в ~300 мс.
+- `plugins.changed` → `{ plugins: InstalledPlugin[] }` — Список плагинов изменился: установили, удалили, включили, выключили, обновили версию. Изменения только текста ошибки не считаются.
+- `wallet.changed` → `WalletBalances` — Баланс Stars или TON активного аккаунта изменился (с сервера или через setLocal). Приходит на следующей итерации цикла событий.
+
+## Типы данных
+
+Объекты, которые API принимает и возвращает. Одноимённые интерфейсы из разных файлов слиты, как это делает TypeScript.
+
+### `Peer`
+
+- `id: PeerId` — Внутренний id DamZaGram (с битами типа). Используй его во всех вызовах API.
+- `tgId: number` — Голый Telegram id (как в ботах и t.me/c/...).
+- `name: string` — Имя пользователя или название чата.
+- `username: string` — Юзернейм без @ или ''.
+- `type: 'user' | 'bot' | 'group' | 'channel' | 'unknown'` — Тип чата.
+- `isSelf: boolean` — Это ты сам («Избранное»).
+
+### `Message`
+
+- `id: number` — id сообщения в чате.
+- `peerId: PeerId` — id чата, в котором сообщение.
+- `chat: Peer` — Чат сообщения.
+- `fromId: PeerId` — id отправителя (в каналах — сам канал).
+- `fromName: string` — Имя отправителя.
+- `text: string` — Текст или подпись к медиа, без форматирования.
+- `date: number` — Unix time, секунды.
+- `out: boolean` — Исходящее (отправил ты).
+- `service: boolean` — Сервисное сообщение («X вступил в группу»).
+- `post: boolean` — Пост в канале.
+- `pinned: boolean` — Закреплено.
+- `deleted: boolean` — true, если сообщение удалено на сервере, но сохранено AyuGram.
+- `replyToId: number` — 0, если не ответ.
+- `views: number` — Просмотры (для постов каналов).
+- `media?: MediaType` — Тип вложения, если есть.
+- `selfId: PeerId` — Аккаунт, которому пришло сообщение: id его Peer. События сообщений приходят от всех аккаунтов, а API работает от активного — прежде чем действовать, сравни с dzg.users.self().id.
+- `entities: MessageEntity[]` — Форматирование текста.
+- `editDate: number` — Дата последнего изменения, 0 — не редактировалось.
+- `groupedId: string` — id альбома, '' — не в альбоме.
+- `forwardFrom?: MessageForward` — Есть у пересланных сообщений.
+- `mediaInfo?: MessageMediaInfo` — Подробности о файле или фото (если есть media).
+- `buttons?: MessageButton[][]` — Кнопки бота: строки, в строке — кнопки слева направо.
+- `reactions?: MessageReaction[]` — Реакции под сообщением.
+- `topicId?: number` — id темы форума (только в форумах).
+
+### `SendContext`
+
+- `text: string` — Текст, который сейчас уйдёт (уже с правками предыдущих хуков).
+- `peerId: PeerId` — id чата.
+- `chat: Peer` — Чат, в который отправляют.
+- `replyTo: number` — id сообщения, на которое отвечают, или 0.
+
+### `CommandContext`
+
+- `args: string[]` — Аргументы, разбитые по пробелам.
+- `rest: string` — Всё после имени команды одной строкой.
+- `text: string` — Весь текст сообщения с командой.
+- `chat: Peer` — Чат, в котором набрали команду.
+- `replyTo: number` — id сообщения, на которое отвечали, или 0.
+
+### `CommandSpec`
+
+- `description?: string` — Описание команды, его отдаёт dzg.commands.all().
+- `run(ctx: CommandContext): void | Promise<void>` — Вызывается вместо отправки сообщения.
+
+### `MenuItem<T>`
+
+- `title: string | ((target: T) => string)` — Текст пункта или функция, которая строит его для конкретной цели.
+- `when?: (target: T) => boolean` — Показывать пункт, только если вернула true.
+- `onClick(target: T): void` — Клик по пункту.
+
+### `BoxSpec`
+
+- `title?: string` — Заголовок окна.
+- `text?: string` — Текст под заголовком.
+- `inputs?: { id: string; placeholder?: string; value?: string; multiline?: boolean }[]` — Поля ввода; значения придут в values[id].
+- `toggles?: { id: string; text: string; checked?: boolean }[]` — Чекбоксы; значения придут в values[id].
+- `buttons?: { id: string; text: string; danger?: boolean }[]` — По умолчанию одна кнопка OK.
+
+### `BoxResult`
+
+- `button: string` — id нажатой кнопки или 'cancel', если окно закрыли.
+- `values: Record<string, string | boolean>` — Значения полей и чекбоксов по их id.
+
+### `Rect`
+
+- `x: number` — Левый край.
+- `y: number` — Верхний край.
+- `width: number` — Ширина.
+- `height: number` — Высота.
+
+### `WidgetDump`
+
+- `className: string` — C++ имя класса.
+- `name: string` — objectName виджета.
+- `visible: boolean` — Виден ли виджет.
+- `geometry: Rect` — Положение в родителе.
+- `children?: WidgetDump[]` — Дочерние виджеты (до заданной глубины).
+
+### `Widget`
+
+Слабая ссылка на любой виджет клиента. Если виджет уже удалён, методы ничего не делают, valid() вернёт false.
+
+- `readonly id: number` — Стабильный id виджета в рамках плагина.
+- `on(event: string, handler: (widget: Widget, value?: unknown) => void): Widget` — Подписаться на событие. Подписаться на событие созданного виджета: click, change, submit, destroyed.
+- `valid(): boolean` — Виджет ещё существует.
+- `className(): string` — Настоящее C++ имя класса, например "HistoryView::TopBarWidget".
+- `classChain(): string[]` — Имя класса и цепочка Qt-родителей.
+- `name(): string` — objectName виджета.
+- `setName(name: string): void` — Задать objectName (удобно для поиска через find).
+- `geometry(): Rect` — Положение и размер в координатах родителя.
+- `globalGeometry(): Rect` — Положение и размер в координатах экрана.
+- `setGeometry(x: number, y: number, width: number, height: number): void` — Переместить и изменить размер.
+- `move(x: number, y: number): void` — Переместить.
+- `resize(width: number, height: number): void` — Изменить размер.
+- `visible(): boolean` — Виден ли виджет.
+- `setVisible(visible: boolean): void` — Показать или спрятать.
+- `show(): void` — Показать.
+- `hide(): void` — Спрятать.
+- `raise(): void` — Поднять над соседями.
+- `lower(): void` — Опустить под соседей.
+- `update(): void` — Перерисовать.
+- `setOpacity(opacity: number): void` — 0..1, 1 снимает эффект.
+- `setEnabled(enabled: boolean): void` — Включить или выключить (серый, не реагирует на клики).
+- `setFocus(): void` — Поставить фокус клавиатуры.
+- `destroy(): void` — Удалить виджет. Чужие виджеты клиента так удалять опасно.
+- `parentWidget(): Widget | null` — Родитель или null.
+- `window(): Widget | null` — Окно верхнего уровня, в котором лежит виджет.
+- `childWidgets(): Widget[]` — Прямые потомки.
+- `find(className?: string, name?: string): Widget[]` — Найти потомков. Поиск среди всех потомков. className сравнивается с полным или коротким именем.
+- `childAt(x: number, y: number): Widget | null` — Потомок в точке (локальные координаты).
+- `prop(name: string): unknown` — Значение Qt-свойства (Q_PROPERTY) по имени.
+- `setProp(name: string, value: unknown): boolean` — Записать Qt-свойство. false, если не вышло.
+- `propNames(): string[]` — Имена Qt-свойств виджета.
+- `click(x: number, y: number): void` — Синтетический клик левой кнопкой в локальных координатах.
+- `typeText(text: string): void` — Напечатать текст, как с клавиатуры.
+- `grab(path: string): boolean` — Сохранить скриншот виджета в PNG.
+- `text(): string` — Для полей ввода, лейблов и кнопок.
+- `setText(text: string): void` — Задать текст полю, лейблу или кнопке.
+- `dump(depth: number): WidgetDump` — Дерево виджета до заданной глубины — для изучения интерфейса.
+
+### `CreateProps`
+
+- `x?: number` — Положение в родителе.
+- `y?: number` — Положение в родителе.
+- `width?: number` — Ширина.
+- `height?: number` — Высота.
+- `text?: string` — Текст лейбла, кнопки, поля или чекбокса.
+- `name?: string` — objectName.
+- `visible?: boolean` — По умолчанию true.
+- `style?: 'light'` — button: 'light' — вторичная кнопка.
+- `placeholder?: string` — input
+- `multiline?: boolean` — input: многострочное поле.
+- `checked?: boolean` — checkbox
+- `color?: string` — panel: цвет #RRGGBB или #AARRGGBB и скругление.
+- `radius?: number` — panel: скругление углов, px.
+- `onClick?: (widget: Widget) => void` — button, panel: клик.
+- `onChange?: (widget: Widget, value: string | boolean) => void` — input: текст; checkbox: состояние.
+- `onSubmit?: (widget: Widget, value: string) => void` — input: Enter (Ctrl+Enter в многострочном поле).
+- `on?: { click?: (widget: Widget) => void; change?: (widget: Widget, value: string | boolean) => void; submit?: (widget: Widget, value: string) => void }` — Те же обработчики одним объектом.
+
+### `FetchOptions`
+
+- `method?: string` — GET (по умолчанию), POST, PUT, DELETE, PATCH...
+- `headers?: Record<string, string>` — Заголовки запроса.
+- `body?: string` — Тело запроса (строка, уйдёт как UTF-8).
+- `json?: unknown` — Отправить JSON: выставит Content-Type и сериализует объект.
+- `timeout?: number` — Таймаут в мс, по умолчанию 30000.
+
+### `FetchResponse`
+
+- `status: number` — HTTP-код ответа.
+- `ok: boolean` — status от 200 до 299.
+- `url: string` — Итоговый адрес (после редиректов).
+- `headers: Record<string, string>` — Имена заголовков в нижнем регистре.
+- `text(): Promise<string>` — Тело ответа строкой (UTF-8).
+- `json<T = any>(): Promise<T>` — Тело ответа, разобранное как JSON.
+
+### `AppLanguage`
+
+Язык интерфейса клиента.
+
+- `id: string` — Код языка: 'ru', 'en', 'de'... Для своих языковых пакетов — их id.
+- `baseId: string` — Базовый язык пакета ('' если нет): для 'ru-custom' — 'ru'.
+- `name: string` — Название языка на нём самом: 'Русский', 'English'.
+
+### `MessageEntity`
+
+Кусок форматирования. offset и length — в UTF-16 (как String.length в JS).
+
+- `type: MessageEntityType | string` — Тип сущности.
+- `offset: number` — Начало (UTF-16).
+- `length: number` — Длина (UTF-16).
+- `url?: string` — textLink: адрес ссылки.
+- `userId?: PeerId` — textMention: id пользователя (PeerId).
+- `language?: string` — pre: язык блока кода.
+- `documentId?: string` — customEmoji: id документа премиум-эмодзи.
+- `collapsed?: boolean` — blockquote: свёрнутая (раскрывающаяся) цитата.
+
+### `FormattedText`
+
+Текст и форматирование — результат parse(), вход format().
+
+- `text: string` — Текст без разметки.
+- `entities: MessageEntity[]` — Форматирование.
+
+### `MessageButton`
+
+- `text: string` — Надпись на кнопке.
+- `type: 'url' | 'callback' | 'other'` — Грубый тип из контракта API. Точный — в kind.
+- `kind: MessageButtonKind` — Точный вид кнопки.
+- `url?: string` — url, webView, simpleWebView, auth.
+- `data?: string` — callback: данные кнопки (как строка UTF-8).
+- `copyText?: string` — copyText: текст, который кнопка копирует.
+
+### `MessageReaction`
+
+- `emoji: string` — Эмодзи ('👍'), id премиум-эмодзи ('5368324170671202286') или 'paid' для звёзд.
+- `count: number` — Сколько раз поставили.
+- `chosen: boolean` — Эту реакцию поставил ты.
+- `customEmojiId?: string` — id премиум-эмодзи.
+- `paid?: boolean` — Платная реакция звёздами.
+
+### `MessageMediaInfo`
+
+- `fileName?: string` — Имя файла.
+- `mime?: string` — MIME-тип.
+- `size?: number` — Байты.
+- `duration?: number` — Секунды (аудио, видео, голосовые, кружки).
+- `width?: number` — Ширина (фото, видео).
+- `height?: number` — Высота (фото, видео).
+- `documentId?: string` — id документа (файлы, видео, стикеры...).
+- `photoId?: string` — id фото.
+- `spoiler?: boolean` — Медиа скрыто под спойлером.
+
+### `MessageForward`
+
+- `name: string` — Имя автора оригинала (или подпись скрытого отправителя).
+- `peerId?: PeerId` — Есть, если автор оригинала известен клиенту.
+- `date: number` — Дата оригинала, unix time.
+- `messageId?: number` — id оригинала в канале-источнике.
+- `postAuthor?: string` — Подпись автора поста в канале.
+- `imported?: boolean` — Сообщение импортировано из другого мессенджера.
+
+### `MessagesSendOptions`
+
+- `replyTo?: number | Message` — Ответ на сообщение: id или сам Message.
+- `topicId?: number` — Тема форума, в которую отправить.
+- `silent?: boolean` — Без звука у получателей.
+- `runHooks?: boolean` — Пропустить сообщение через onBeforeSend и команды плагинов. По умолчанию false.
+- `parse?: TextParseMode` — Разметка текста. По умолчанию 'none' — текст как есть.
+- `scheduleDate?: number | Date` — Отложенная отправка: unix time (секунды), миллисекунды или Date.
+- `noWebpage?: boolean` — Не показывать превью ссылок.
+- `entities?: MessageEntity[]` — Готовое форматирование. Добавляется к тому, что дал parse.
+
+### `MessagesEditOptions`
+
+- `parse?: TextParseMode` — Разметка текста.
+- `noWebpage?: boolean` — Без превью ссылок.
+- `entities?: MessageEntity[]` — Готовое форматирование.
+
+### `MessagesHistoryOptions`
+
+- `limit?: number` — Сколько сообщений, по умолчанию 50. Больше 100 — догрузит страницами.
+- `offsetId?: number | Message` — Брать сообщения старше этого id (0 — с самого нового).
+- `addOffset?: number` — Сдвиг от offsetId. Отрицательный — взять более новые (тогда не больше 100).
+- `offsetDate?: number | Date` — Брать сообщения старше этой даты.
+- `minId?: number` — Только id больше minId.
+- `maxId?: number` — Только id меньше maxId.
+
+### `MessagesIterateOptions`
+
+- `limit?: number` — Всего сообщений, по умолчанию — вся история.
+- `batch?: number` — Размер страницы, до 100.
+- `offsetId?: number | Message` — Начать со старших, чем этот id.
+
+### `MessagesSearchOptions`
+
+- `limit?: number` — По умолчанию 50. Больше 100 — догрузит страницами.
+- `from?: PeerId | Peer` — Только сообщения этого отправителя (в «Избранном» — из этого чата).
+- `filter?: MessagesSearchFilter` — Только сообщения с этим типом вложений.
+- `topicId?: number` — Тема форума.
+- `minDate?: number | Date` — Не раньше этой даты.
+- `maxDate?: number | Date` — Не позже этой даты.
+- `offsetId?: number` — Искать старше этого id.
+- `addOffset?: number` — Сдвиг от offsetId.
+- `folder?: number` — Только глобальный поиск: 0 — основной список, 1 — архив.
+- `type?: 'channels' | 'groups' | 'users'` — Только глобальный поиск: искать только в каналах, группах или личках.
+
+### `MessagesForwardOptions`
+
+- `silent?: boolean` — Без звука у получателей.
+- `dropAuthor?: boolean` — Переслать без автора (как копию).
+- `dropCaptions?: boolean` — Без автора и без подписей к медиа.
+- `scheduleDate?: number | Date` — Отложенная пересылка.
+- `topicId?: number` — Тема форума в чате назначения.
+
+### `MessagesSendFileOptions`
+
+- `caption?: string` — Подпись. Ставится к последнему файлу (к первому, если это альбом фото и видео).
+- `parse?: TextParseMode` — Разметка подписи.
+- `entities?: MessageEntity[]` — Готовое форматирование подписи.
+- `asDocument?: boolean` — Отправить файлом, без сжатия.
+- `album?: boolean` — Несколько файлов — альбомом (по умолчанию true).
+- `spoiler?: boolean` — Скрыть фото и видео под спойлер.
+- `replyTo?: number | Message` — Ответ на сообщение.
+- `topicId?: number` — Тема форума.
+- `silent?: boolean` — Без звука.
+- `scheduleDate?: number | Date` — Отложенная отправка.
+
+### `MessagesButtonAnswer`
+
+- `answer?: string` — Ответ бота (всплывающий текст).
+- `url?: string` — Ссылка: у url-кнопки или из ответа бота.
+- `alert?: boolean` — Бот просил показать ответ окном, а не всплывашкой.
+
+### `ChatListEntry`
+
+Чат в списке чатов: Peer плюс счётчики и состояние. Расширяет `Peer`.
+
+- `unread: number` — Непрочитанные сообщения.
+- `unreadMark: boolean` — Чат вручную помечен непрочитанным.
+- `mentions: number` — Непрочитанные упоминания.
+- `reactions: number` — Непрочитанные реакции на твои сообщения.
+- `pinned: boolean` — Закреплён в той папке, из которой взят список (для entry() — в основном списке).
+- `muted: boolean` — Уведомления выключены.
+- `archived: boolean` — Чат в архиве.
+- `lastMessage: Message | null` — Последнее сообщение, если клиент его знает.
+
+### `ChatFolder`
+
+Папка чатов (фильтр). Папка «Все чаты» сюда не входит: это folder 0.
+
+- `id: number` — id папки для dzg.chats.list({ folder }).
+- `title: string` — Название папки.
+- `emoji: string` — Эмодзи-иконка папки или ''.
+- `chatlist: boolean` — Папка добавлена по ссылке-приглашению (chatlist).
+
+### `ChatListOptions`
+
+- `folder?: number | 'archive'` — id папки из folders(), 'archive' — архив, 0 или не задано — основной список.
+- `limit?: number` — Сколько чатов вернуть, по умолчанию 100. 0 — все, что загружены.
+- `unreadOnly?: boolean` — Только чаты с непрочитанными или с пометкой «непрочитано».
+- `type?: Peer['type'] | Peer['type'][]` — Только чаты этого типа (или типов).
+
+### `ChatMember`
+
+Участник группы или канала. Расширяет `Peer`.
+
+- `role: ChatMemberRole` — Роль в чате.
+- `rank?: string` — Должность (подпись админа или участника), если задана.
+
+### `ChatMembersOptions`
+
+- `limit?: number` — Сколько участников вернуть, по умолчанию 200, максимум 10000.
+- `query?: string` — Поиск по имени и юзернейму.
+
+### `ChatInfo`
+
+Полная информация о чате, свежая с сервера.
+
+- `peer: Peer` — Сам чат.
+- `about: string` — Описание группы или канала, для пользователя — био.
+- `membersCount: number` — 0 для личных чатов.
+- `onlineCount: number` — Сколько участников сейчас в сети (по данным сервера).
+- `inviteLink: string` — Основная ссылка-приглашение, если она тебе доступна, иначе ''.
+- `linkedChat: Peer | null` — Связанный чат: группа обсуждения канала или канал группы.
+- `slowmodeSeconds: number` — Медленный режим, секунды. 0 — выключен.
+- `amIn: boolean` — Ты состоишь в чате. Для личных чатов всегда true.
+- `isCreator: boolean` — Ты создатель.
+- `isAdmin: boolean` — Ты админ.
+- `isForum: boolean` — Группа с темами.
+- `isVerified: boolean` — Галочка верификации.
+- `isScam: boolean` — Помечен как скам.
+- `isFake: boolean` — Помечен как фейк.
+
+### `ChatCreateOptions`
+
+- `title: string` — Название.
+- `type?: 'group' | 'supergroup' | 'channel'` — 'group' (по умолчанию) — обычная группа, 'supergroup' — супергруппа, 'channel' — канал.
+- `about?: string` — Описание.
+- `users?: (PeerId | Peer)[]` — Кого сразу пригласить.
+- `forum?: boolean` — Супергруппа с темами.
+
+### `InviteLinkOptions`
+
+- `expireDate?: number` — Unix time, когда ссылка перестанет работать.
+- `usageLimit?: number` — Сколько раз по ней можно вступить.
+- `title?: string` — Название ссылки (видно только админам).
+- `requestNeeded?: boolean` — Вступление по заявке.
+
+### `UserStatus`
+
+- `online: boolean` — Сейчас в сети.
+- `lastSeen: number` — Unix time последнего визита; когда в сети — текущее время; 0, если скрыто.
+- `kind: UserStatusKind` — Вид статуса.
+- `text: string` — Готовая строка на языке клиента: «в сети», «был(а) недавно»...
+
+### `UserInfo`
+
+- `peer: Peer` — Сам пользователь.
+- `bio: string` — Био ('' если нет).
+- `phone: string` — Телефон без '+', если виден.
+- `firstName: string` — Имя.
+- `lastName: string` — Фамилия.
+- `isContact: boolean` — В твоих контактах.
+- `isPremium: boolean` — Есть Telegram Premium.
+- `isBot: boolean` — Это бот.
+- `isVerified: boolean` — Галочка верификации.
+- `isScam: boolean` — Помечен как скам.
+- `isFake: boolean` — Помечен как фейк.
+- `isBlocked: boolean` — Ты заблокировал этого пользователя.
+- `commonChats: number` — Сколько у вас общих групп.
+- `status: UserStatus` — Статус в сети.
+- `birthday: { day: number; month: number; year: number } | null` — День рождения, если пользователь его показывает. year = 0, если год скрыт.
+
+### `AccountEntry`
+
+- `index: number` — Номер аккаунта в клиенте. Не обязательно идёт подряд.
+- `self: Peer` — Пользователь аккаунта.
+- `active: boolean` — Аккаунт активен сейчас.
+- `premium: boolean` — У аккаунта есть Premium.
+
+### `TopBarButtonSpec`
+
+Кнопка в шапке чата (справа, рядом с поиском и звонком).
+
+- `icon?: DzgIconName | string` — Иконка. Нужна иконка или текст.
+- `text?: string` — Короткий текст вместо иконки, например 'Аа' или 'GPT'.
+- `tooltip?: string` — Подсказка при наведении.
+- `when?(chat: Peer): boolean` — Показывать кнопку в этом чате? Вызывается синхронно при каждом обновлении шапки (смена чата, выделение...), поэтому должна быть быстрой. Нет функции — кнопка видна во всех чатах.
+- `onClick(chat: Peer): void` — Клик по кнопке.
+
+### `ComposeButtonSpec`
+
+Кнопка у поля ввода (справа, рядом с эмодзи и «запланированными»).
+
+- `icon?: DzgIconName | string` — Иконка (или text).
+- `text?: string` — Короткий текст вместо иконки.
+- `tooltip?: string` — Подсказка при наведении.
+- `onClick(chat: Peer | null): void` — chat — чат, в котором открыто поле, или null.
+
+### `MainMenuItemSpec`
+
+- `title: string` — Текст пункта.
+- `icon?: DzgIconName | string` — По умолчанию 'customize'.
+- `onClick(): void` — Меню закрывается перед вызовом.
+
+### `NotifySpec`
+
+- `title?: string` — Заголовок.
+- `text: string` — Текст.
+- `onClick?(): void` — Клик по уведомлению или по кнопке «Открыть». Окно клиента активируется.
+- `silent?: boolean` — Без звука и без мигания значка на панели задач.
+
+### `ComposeState`
+
+- `chat: Peer | null` — Чат, к которому относится поле, или null (например, черновик без чата).
+- `text: string` — Текст в поле.
+
+### `PanelLabelOptions`
+
+- `bold?: boolean` — Заголовок раздела (как в настройках).
+- `muted?: boolean` — Серый поясняющий текст.
+
+### `PanelButtonOptions`
+
+- `style?: 'light' | 'row'` — По умолчанию — заполненная кнопка на всю ширину. 'light' — светлая кнопка; 'row' — строка как в настройках. Если задан icon, кнопка всегда строка с иконкой.
+- `icon?: DzgIconName | string` — Иконка: кнопка станет строкой с иконкой.
+
+### `PanelInputOptions`
+
+- `placeholder?: string` — Подсказка в пустом поле.
+- `value?: string` — Начальный текст.
+- `multiline?: boolean` — Многострочное поле: отправка по Ctrl+Enter.
+- `onSubmit?(text: string, widget: Widget): void` — Enter в однострочном поле, Ctrl+Enter в многострочном.
+- `onChange?(text: string, widget: Widget): void` — Каждое изменение текста.
+
+### `Panel`
+
+Боковая панель справа в главном окне — как третья колонка. У плагина одна панель: повторный dzg.ui.panel() возвращает её же. Панели разных плагинов становятся вкладками; показана последняя открытая.
+
+- `readonly id: number` — id панели.
+- `readonly widget: Widget` — Вся панель (заголовок + содержимое).
+- `readonly content: Widget` — Прокручиваемая колонка с элементами.
+- `setTitle(title: string): Panel` — Поменять заголовок.
+- `setWidth(width: number): Panel` — 240..720 px.
+- `show(): Panel` — Сделать вкладку панели активной.
+- `scrollToBottom(): Panel` — Прокрутить содержимое вниз.
+- `clear(): Panel` — Удалить все элементы. Обработчики старых элементов отключаются.
+- `addLabel(text: string, options?: PanelLabelOptions): Widget | null` — Текст можно менять: label.setText('...').
+- `addButton(text: string, onClick: (widget: Widget) => void, options?: PanelButtonOptions): Widget | null` — Кнопка на всю ширину.
+- `addInput(options?: PanelInputOptions): Widget | null` — Текущий текст: widget.text().
+- `addToggle(text: string, checked: boolean, onChange: (checked: boolean, widget: Widget) => void): Widget | null` — Переключатель как в настройках.
+- `addSeparator(): void` — Разделитель.
+- `addSkip(px?: number): void` — Пустое место, по умолчанию стандартный отступ.
+- `close(): void` — Закрыть панель. Срабатывает on('close').
+- `on(event: 'close', handler: (panel: Panel) => void): Panel` — 'close' — панель закрыта: крестиком, close(), выгрузкой окна.
+- `isOpen(): boolean` — Панель ещё открыта.
+
+### `PanelOptions`
+
+- `title?: string` — По умолчанию — имя плагина.
+- `width?: number` — По умолчанию 340, допустимо 240..720.
+
+### `TLObject`
+
+TL-объект в JSON. Конструктор пишется в поле `_`, остальные поля называются так же, как в api.tl (snake_case): - `int`, `double` — number; - `long` — строка с десятичным числом (`'-1001234567890'`), можно BigInt; - `string` — строка; - `bytes`, `int128`, `int256` — base64-строка (на вход можно Uint8Array, ArrayBuffer, массив байт или `{ text: 'строка' }` — она уйдёт как UTF-8); - `Bool` — true / false; - `Vector<T>` — массив; - `flags.N?true` — true, если флаг стоит; отсутствует, если нет; - поля-флаги (`flags:#`, `flags2:#`) считаются сами и в ответах не приходят; - необязательные поля (`flags.N?T`), которых нет, просто отсутствуют.
+
+- `_: string` — Имя конструктора: 'inputPeerSelf', 'message'...
+- `[field: string]: any` — Поля как в api.tl (snake_case).
+
+### `ApiCallOptions`
+
+- `timeout?: number` — Через сколько миллисекунд отклонить промис с ошибкой TIMEOUT и отменить запрос. 0 — ждать сколько нужно.
+- `floodSleep?: number` — FLOOD_WAIT не дольше стольких секунд клиент переждёт сам и повторит запрос. На более долгий промис отклоняется с ошибкой (error.seconds). По умолчанию 10, 0 — никогда не ждать.
+- `applyResult?: boolean` — true (по умолчанию): клиент обработает ответ так, будто запрос сделал он сам — применит Updates (сообщения появятся в чатах, придут события) и запомнит users / chats из ответа (после этого работают inputPeer() и dzg.chats.get()). false: ответ видит только плагин.
+- `dc?: number` — Дата-центр, в который уйдёт запрос (для продвинутых случаев: upload.getFile файла с другого DC). Методы upload.get* без dc идут в DC аккаунта через отдельное соединение для загрузок. По умолчанию — основное соединение.
+
+### `ApiError`
+
+Ошибка dzg.api.call. Расширяет `Error`.
+
+- `code?: number` — Код ошибки Telegram: 400, 403, 420... Нет у локальных ошибок (кодирование, TIMEOUT).
+- `type?: string` — Тип ошибки: 'PEER_ID_INVALID', 'FLOOD_WAIT_30', 'TIMEOUT'...
+- `seconds?: number` — Для FLOOD_WAIT_X / SLOWMODE_WAIT_X: сколько секунд ждать.
+
+### `TLParamInfo`
+
+- `name: string` — Имя поля как в api.tl.
+- `type: string` — Тип как в api.tl, вместе с условием: `'flags.0?Vector<InputDocument>'`.
+- `optional: boolean` — Поле зависит от флага (flags.N?...).
+
+### `TLSchemaInfo`
+
+- `kind: 'method' | 'constructor'` — Метод или конструктор.
+- `name: string` — Имя: 'messages.getHistory', 'inputPeerSelf'.
+- `id: number` — Id конструктора (беззнаковое 32-битное число).
+- `idHex: string` — То же id в hex, 8 символов: '4423e6c5'.
+- `params: TLParamInfo[]` — Поля по порядку схемы.
+- `type: string` — Тип результата метода или тип конструктора: 'messages.Messages', 'Update'.
+
+### `ApiUpdateMeta`
+
+Второй аргумент обработчика onUpdate.
+
+- `self: PeerId` — Id аккаунта (PeerId), которому пришло обновление.
+
+### `InstalledPlugin`
+
+Установленный плагин, как его видит менеджер.
+
+- `id: string` — id плагина.
+- `name: string` — Название.
+- `version: string` — Версия.
+- `author: string` — Автор.
+- `description: string` — Описание.
+- `dir: string` — Папка плагина.
+- `type: 'module' | 'script'` — 'module' (ES-модуль, по умолчанию) или 'script'.
+- `enabled: boolean` — Пользователь включил плагин.
+- `loaded: boolean` — Плагин сейчас работает (включён и загрузился без ошибок).
+- `builtin: boolean` — Встроенный: поставляется с клиентом, удалить нельзя — только выключить.
+- `hasSettings: boolean` — Есть схема настроек в manifest.json.
+- `error: string` — Последняя ошибка ('' если всё хорошо).
+
+### `PluginPackageInfo`
+
+Что лежит по ссылке или пути, без установки.
+
+- `id: string` — id плагина.
+- `name: string` — Название.
+- `version: string` — Версия.
+- `author: string` — Автор.
+- `description: string` — Описание.
+- `files: number` — Сколько файлов в пакете.
+- `size: number` — Суммарный размер в байтах.
+- `singleFile: boolean` — Плагин из одного .js: манифест собран из шапки `// @name ...`.
+- `source: string` — Итоговая ссылка или имя файла.
+- `installed: boolean` — Плагин с таким id уже установлен (установка его обновит).
+
+### `BuiltinPluginInfo`
+
+Встроенный плагин, который клиент поставляет и обновляет сам.
+
+- `id: string` — id плагина.
+- `name: string` — Название.
+- `version: string` — Версия, вшитая в клиент.
+- `installedVersion: string` — Версия в `tdata/plugins/<id>/` ('' если не установлен).
+- `enabledByDefault: boolean` — Включается сам при первом запуске (пользователь может выключить).
+- `replaced: boolean` — Пользователь заменил плагин своим (в manifest.json нет "builtin": true) — клиент его не трогает.
+- `updated: boolean` — Установлен или обновлён при этом запуске.
+- `error: string` — Ошибка установки ('' если всё хорошо).
+
+### `PluginCommandInfo`
+
+Команда любого загруженного плагина.
+
+- `name: string` — Имя команды без /.
+- `description: string` — Описание команды.
+- `plugin: string` — id плагина, который зарегистрировал команду.
+- `pluginName: string` — Название плагина.
+
+### `WalletBalances`
+
+Балансы активного аккаунта, как их сейчас показывает клиент.
+
+- `stars: number` — Звёзды Telegram Stars (дробная часть — нано-звёзды).
+- `ton: number` — TON.
+- `starsLoaded: boolean` — Клиент уже получил баланс Stars с сервера.
+- `tonLoaded: boolean` — Клиент уже получил баланс TON с сервера.
+
+## Псевдонимы типов
+
+### `PeerId`
+
+Идентификатор чата или пользователя. Строка: 64-битные id не влезают в number без потерь.
+
+```ts
+type PeerId = string;
+```
+
+### `MediaType`
+
+```ts
+type MediaType = | 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'videoNote' | 'audio' | 'file' | 'poll' | 'other';
+```
+
+### `BeforeSendHook`
+
+Хук перед отправкой: - вернуть строку или { text } — заменить текст; - вернуть false или { cancel: true } — не отправлять; - ничего не вернуть — оставить как есть.
+
+```ts
+type BeforeSendHook = (ctx: SendContext) => string | false | { text?: string; cancel?: boolean } | void;
+```
+
+### `WidgetType`
+
+```ts
+type WidgetType = 'label' | 'button' | 'input' | 'checkbox' | 'panel';
+```
+
+### `MessageEntityType`
+
+Тип сущности форматирования. Имена как в Bot API, только camelCase. Ссылки, упоминания, хэштеги и команды клиент находит в тексте сам.
+
+```ts
+type MessageEntityType = | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'code' | 'pre' | 'blockquote' | 'textLink' | 'textMention' | 'customEmoji' | 'url' | 'email' | 'phone' | 'bankCard' | 'mention' | 'hashtag' | 'cashtag' | 'botCommand' | 'mediaTimestamp' | 'formattedDate' | 'subscript' | 'superscript' | 'marked';
+```
+
+### `TextParseMode`
+
+```ts
+type TextParseMode = 'markdown' | 'md' | 'html' | 'none';
+```
+
+### `MessageButtonKind`
+
+Вид inline-кнопки или кнопки клавиатуры бота.
+
+```ts
+type MessageButtonKind = | 'text' | 'url' | 'callback' | 'callbackWithPassword' | 'requestPhone' | 'requestLocation' | 'requestPoll' | 'requestPeer' | 'switchInline' | 'switchInlineSame' | 'game' | 'buy' | 'auth' | 'userProfile' | 'webView' | 'simpleWebView' | 'copyText' | 'disabled' | 'other';
+```
+
+### `MessagesSearchFilter`
+
+```ts
+type MessagesSearchFilter = | 'photo' | 'video' | 'photoVideo' | 'document' | 'url' | 'gif' | 'voice' | 'music' | 'roundVideo' | 'roundVoice' | 'mentions' | 'pinned' | 'geo' | 'contacts' | 'chatPhotos' | 'poll';
+```
+
+### `TypingAction`
+
+Действие «печатает…». В setTyping можно передать любое, кроме 'import_history' (его присылает только сервер, когда кто-то импортирует историю).
+
+```ts
+type TypingAction = | 'typing' | 'cancel' | 'record_video' | 'upload_video' | 'record_voice' | 'upload_voice' | 'record_round' | 'upload_round' | 'upload_photo' | 'upload_document' | 'choose_location' | 'choose_contact' | 'choose_sticker' | 'play_game' | 'import_history';
+```
+
+### `ChatMemberRole`
+
+```ts
+type ChatMemberRole = 'creator' | 'admin' | 'member' | 'restricted' | 'left' | 'banned';
+```
+
+### `UserStatusKind`
+
+Вид статуса: - online — в сети; - offline — был(а) в сети в lastSeen; - recently / lastWeek / lastMonth / longAgo — время скрыто, известен только порядок; - hidden — неизвестно.
+
+```ts
+type UserStatusKind = | 'online' | 'offline' | 'recently' | 'lastWeek' | 'lastMonth' | 'longAgo' | 'hidden';
+```
+
+### `DzgIconName`
+
+Имя иконки из встроенного набора клиента. Полный список — dzg.ui.icons(). Неизвестное имя не ломает кнопку: в лог пишется предупреждение, вместо иконки рисуется 'customize' (если нет текста).
+
+```ts
+type DzgIconName = | 'search' | 'settings' | 'customize' | 'edit' | 'delete' | 'clear' | 'copy' | 'link' | 'links' | 'pin' | 'unpin' | 'mute' | 'unmute' | 'sound' | 'soundOff' | 'silent' | 'archive' | 'unarchive' | 'info' | 'help' | 'stats' | 'bot' | 'code' | 'experimental' | 'star' | 'fave' | 'like' | 'premium' | 'gift' | 'bell' | 'lock' | 'user' | 'users' | 'addUser' | 'admin' | 'username' | 'channel' | 'chat' | ...;
+```
+
+### `RenderTransform`
+
+Возвращает текст, который показать вместо message.text, или null/undefined, чтобы оставить как есть. Меняется только отображение: сообщение, его копирование и пересылка остаются прежними. Форматирование заменённого текста сбрасывается. Если трансформаций несколько (даже из разных плагинов), они применяются по очереди: следующая получает результат предыдущей в message.text.
+
+```ts
+type RenderTransform = (message: Message) => string | null | undefined;
+```
+
+### `TLInputPeerLike`
+
+Значение, которое можно передать там, где ждут InputPeer / InputUser / InputChannel.
+
+```ts
+type TLInputPeerLike = TLObject | Peer | Message | PeerId | 'me' | 'self';
+```
+
+
+# Typings (docs/plugins/types/*.d.ts) — ground truth for signatures
+
+
+## docs/plugins/types/core.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — ядро (apiVersion 2).
+// Модули API дописывают свои методы в отдельных файлах этой папки через
+// слияние интерфейсов: `interface DzgMessages { history(...): ... }`.
+// Подключи папку через jsconfig.json — VS Code начнёт подсказывать `dzg`.
+
+/** Идентификатор чата или пользователя. Строка: 64-битные id не влезают в number без потерь. */
+type PeerId = string;
+
+interface Peer {
+  /** Внутренний id DamZaGram (с битами типа). Используй его во всех вызовах API. */
+  id: PeerId;
+  /** Голый Telegram id (как в ботах и t.me/c/...). */
+  tgId: number;
+  name: string;
+  username: string;
+  type: 'user' | 'bot' | 'group' | 'channel' | 'unknown';
+  isSelf: boolean;
+}
+
+type MediaType =
+  | 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'videoNote'
+  | 'audio' | 'file' | 'poll' | 'other';
+
+interface Message {
+  id: number;
+  peerId: PeerId;
+  chat: Peer;
+  fromId: PeerId;
+  fromName: string;
+  text: string;
+  /** Unix time, секунды. */
+  date: number;
+  out: boolean;
+  service: boolean;
+  post: boolean;
+  pinned: boolean;
+  /** true, если сообщение удалено на сервере, но сохранено AyuGram. */
+  deleted: boolean;
+  /** 0, если не ответ. */
+  replyToId: number;
+  views: number;
+  media?: MediaType;
+  /**
+   * Аккаунт, которому пришло сообщение: id его Peer. События сообщений
+   * приходят от всех аккаунтов, а API работает от активного — прежде чем
+   * действовать, сравни с dzg.users.self().id.
+   */
+  selfId: PeerId;
+}
+
+interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  /** Папка плагина (с завершающим слешем не гарантируется). */
+  dir: string;
+  /** Папка для данных плагинов, с завершающим слешем. */
+  dataDir: string;
+}
+
+interface AppInfo {
+  name: 'DamZaGram';
+  version: string;
+  apiVersion: number;
+  platform: string;
+  os: string;
+  pluginsPath: string;
+  devMode: boolean;
+}
+
+interface EventMap {
+  /** Плагин загружен и готов. Срабатывает и после горячей перезагрузки. */
+  'ready': void;
+  /**
+   * Плагин выгружается: выключен, перезагружен или клиент закрывается (окна
+   * и аккаунты ещё доступны). Регистрации, таймеры и цвета dzg.theme клиент
+   * уберёт сам.
+   */
+  'unload': void;
+  /** Аккаунт авторизован и его данные доступны. */
+  'session.ready': Peer;
+  /**
+   * Новое сообщение (входящее или исходящее) появилось в любом чате любого
+   * аккаунта (см. Message.selfId). Приходит на следующей итерации цикла
+   * событий, а не внутри уведомления клиента.
+   */
+  'message.new': Message;
+  /** Сообщение изменилось. Приходит на следующей итерации цикла событий. */
+  'message.edited': Message;
+  /**
+   * Сервер сообщил об удалении. Данные — снимок на момент удаления, сам
+   * обработчик вызывается на следующей итерации: без сохранения удалённых
+   * AyuGram dzg.messages.get его уже может не найти.
+   */
+  'message.deleted': Message;
+  'chat.opened': Peer;
+  /** Пользователь поменял настройку плагина в окне настроек. */
+  'settings.changed': { key: string; value: unknown };
+}
+
+interface SendContext {
+  text: string;
+  peerId: PeerId;
+  chat: Peer;
+  /** id сообщения, на которое отвечают, или 0. */
+  replyTo: number;
+}
+
+/**
+ * Хук перед отправкой:
+ * - вернуть строку или { text } — заменить текст;
+ * - вернуть false или { cancel: true } — не отправлять;
+ * - ничего не вернуть — оставить как есть.
+ */
+type BeforeSendHook = (ctx: SendContext) =>
+  string | false | { text?: string; cancel?: boolean } | void;
+
+interface CommandContext {
+  /** Аргументы, разбитые по пробелам. */
+  args: string[];
+  /** Всё после имени команды одной строкой. */
+  rest: string;
+  text: string;
+  chat: Peer;
+  replyTo: number;
+}
+
+interface CommandSpec {
+  description?: string;
+  run(ctx: CommandContext): void | Promise<void>;
+}
+
+interface MenuItem<T> {
+  /** Текст пункта или функция, которая строит его для конкретной цели. */
+  title: string | ((target: T) => string);
+  /** Показывать пункт, только если вернула true. */
+  when?: (target: T) => boolean;
+  onClick(target: T): void;
+}
+
+interface BoxSpec {
+  title?: string;
+  text?: string;
+  inputs?: { id: string; placeholder?: string; value?: string; multiline?: boolean }[];
+  toggles?: { id: string; text: string; checked?: boolean }[];
+  /** По умолчанию одна кнопка OK. */
+  buttons?: { id: string; text: string; danger?: boolean }[];
+}
+
+interface BoxResult {
+  /** id нажатой кнопки или 'cancel', если окно закрыли. */
+  button: string;
+  values: Record<string, string | boolean>;
+}
+
+interface Rect { x: number; y: number; width: number; height: number }
+
+interface WidgetDump {
+  className: string;
+  name: string;
+  visible: boolean;
+  geometry: Rect;
+  children?: WidgetDump[];
+}
+
+/**
+ * Слабая ссылка на любой виджет клиента.
+ * Если виджет уже удалён, методы ничего не делают, valid() вернёт false.
+ */
+interface Widget {
+  /** Стабильный id виджета в рамках плагина. */
+  readonly id: number;
+  /** Подписаться на событие созданного виджета: click, change, submit, destroyed. */
+  on(event: string, handler: (widget: Widget, value?: unknown) => void): Widget;
+  valid(): boolean;
+  /** Настоящее C++ имя класса, например "HistoryView::TopBarWidget". */
+  className(): string;
+  /** Имя класса и цепочка Qt-родителей. */
+  classChain(): string[];
+  name(): string;
+  setName(name: string): void;
+
+  geometry(): Rect;
+  globalGeometry(): Rect;
+  setGeometry(x: number, y: number, width: number, height: number): void;
+  move(x: number, y: number): void;
+  resize(width: number, height: number): void;
+  visible(): boolean;
+  setVisible(visible: boolean): void;
+  show(): void;
+  hide(): void;
+  raise(): void;
+  lower(): void;
+  update(): void;
+  /** 0..1, 1 снимает эффект. */
+  setOpacity(opacity: number): void;
+  setEnabled(enabled: boolean): void;
+  setFocus(): void;
+  /** Удалить виджет. Чужие виджеты клиента так удалять опасно. */
+  destroy(): void;
+
+  parentWidget(): Widget | null;
+  window(): Widget | null;
+  childWidgets(): Widget[];
+  /** Поиск среди всех потомков. className сравнивается с полным или коротким именем. */
+  find(className?: string, name?: string): Widget[];
+  childAt(x: number, y: number): Widget | null;
+
+  prop(name: string): unknown;
+  setProp(name: string, value: unknown): boolean;
+  propNames(): string[];
+
+  /** Синтетический клик левой кнопкой в локальных координатах. */
+  click(x: number, y: number): void;
+  typeText(text: string): void;
+  /** Сохранить скриншот виджета в PNG. */
+  grab(path: string): boolean;
+
+  /** Для полей ввода, лейблов и кнопок. */
+  text(): string;
+  setText(text: string): void;
+
+  dump(depth: number): WidgetDump;
+}
+
+type WidgetType = 'label' | 'button' | 'input' | 'checkbox' | 'panel';
+
+interface CreateProps {
+  x?: number; y?: number; width?: number; height?: number;
+  text?: string;
+  name?: string;
+  visible?: boolean;
+  /** button: 'light' — вторичная кнопка. */
+  style?: 'light';
+  /** input */
+  placeholder?: string;
+  multiline?: boolean;
+  /** checkbox */
+  checked?: boolean;
+  /** panel: цвет #RRGGBB или #AARRGGBB и скругление. */
+  color?: string;
+  radius?: number;
+  onClick?: (widget: Widget) => void;
+  onChange?: (widget: Widget, value: string | boolean) => void;
+  /** input: Enter (Ctrl+Enter в многострочном поле). */
+  onSubmit?: (widget: Widget, value: string) => void;
+  on?: {
+    click?: (widget: Widget) => void;
+    change?: (widget: Widget, value: string | boolean) => void;
+    submit?: (widget: Widget, value: string) => void;
+  };
+}
+
+interface FetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  /** Отправить JSON: выставит Content-Type и сериализует объект. */
+  json?: unknown;
+  /** Таймаут в мс, по умолчанию 30000. */
+  timeout?: number;
+}
+
+interface FetchResponse {
+  status: number;
+  ok: boolean;
+  url: string;
+  /** Имена заголовков в нижнем регистре. */
+  headers: Record<string, string>;
+  text(): Promise<string>;
+  json<T = any>(): Promise<T>;
+}
+
+interface DzgStorage {
+  get<T = unknown>(key: string, fallback?: T): T;
+  /**
+   * Значение должно сериализоваться в JSON. Циклическая ссылка сохранится
+   * как null; слишком большое значение (около 4 млн элементов) — RangeError.
+   */
+  set(key: string, value: unknown): void;
+  remove(key: string): void;
+  keys(): string[];
+}
+
+interface DzgSettings {
+  get<T = unknown>(key: string): T;
+  all(): Record<string, unknown>;
+  set(key: string, value: unknown): void;
+}
+
+interface DzgUi {
+  toast(text: string, title?: string): void;
+  box(spec: BoxSpec): Promise<BoxResult>;
+  alert(text: string, title?: string): Promise<void>;
+  /** true, если нажали кнопку подтверждения. danger — красная кнопка. */
+  confirm(text: string, options?: { title?: string; confirmText?: string; cancelText?: string; danger?: boolean }): Promise<boolean>;
+  /** null, если пользователь отменил. */
+  prompt(title: string, options?: {
+    text?: string; placeholder?: string; value?: string; multiline?: boolean;
+    confirmText?: string; cancelText?: string;
+  }): Promise<string | null>;
+  /** Возвращает функцию, которая убирает пункт. */
+  addMessageMenuItem(item: MenuItem<Message>): () => void;
+  addChatMenuItem(item: MenuItem<Peer>): () => void;
+  mainWindow(): Widget | null;
+  focused(): Widget | null;
+  /** Поиск по всем окнам приложения. */
+  find(className?: string, name?: string): Widget[];
+  /** parent: null — главное окно. */
+  create(type: WidgetType, parent: Widget | null, props?: CreateProps): Widget | null;
+  repaint(): void;
+}
+
+interface DzgTheme {
+  /** Имя цвета палитры Telegram (windowBg, msgOutBg, ...). Цвет: #RRGGBB или #AARRGGBB. */
+  set(name: string, color: string): boolean;
+  setMany(colors: Record<string, string>): boolean;
+  /** Убрать цвета, заданные этим плагином. Цвета других плагинов остаются. Вызывается сам при выгрузке. */
+  reset(): void;
+  /** Текущий цвет палитры: '#rrggbb' или '#aarrggbb'; null для неизвестного имени. */
+  get(name: string): string | null;
+}
+
+interface DzgChats {
+  current(): Peer | null;
+  get(peerId: PeerId | Peer): Peer | null;
+  /** Ищет только среди уже загруженных клиентом чатов. */
+  find(username: string): Peer | null;
+  open(peerId: PeerId | Peer, messageId?: number): boolean;
+}
+
+interface DzgMessages {
+  send(peerId: PeerId | Peer, text: string, options?: {
+    replyTo?: number;
+    silent?: boolean;
+    /** Пропустить сообщение через onBeforeSend других плагинов. По умолчанию false. */
+    runHooks?: boolean;
+  }): boolean;
+  edit(peerId: PeerId | Peer, messageId: number, text: string): boolean;
+  /**
+   * Удалить сообщения (revoke: true — и у собеседника). Локально удаляет сразу
+   * после текущего обработчика, а не внутри вызова.
+   */
+  delete(peerId: PeerId | Peer, ids: number | number[], options?: { revoke?: boolean }): boolean;
+  get(peerId: PeerId | Peer, messageId: number): Message | null;
+  /** Последние сообщения, которые клиент уже загрузил в память. Запросов к серверу нет. */
+  loaded(peerId: PeerId | Peer, limit?: number): Message[];
+  /** Вернуть true — скрыть сообщение. Вызывается часто: фильтр должен быть быстрым. */
+  addFilter(filter: (message: Message) => boolean): () => void;
+  onBeforeSend(hook: BeforeSendHook): () => void;
+  /** Пересчитать фильтры, например после смены настроек. */
+  refilter(): void;
+}
+
+interface DzgCommands {
+  /** Команда срабатывает, когда пользователь отправляет "/name ...". Сообщение не уходит. */
+  register(name: string, spec: CommandSpec | CommandSpec['run']): () => void;
+  list(): { name: string; description: string }[];
+}
+
+interface DzgHttp {
+  fetch(url: string, options?: FetchOptions): Promise<FetchResponse>;
+}
+
+interface DzgFs {
+  /** null, если файла нет. Относительный путь — от папки плагина. */
+  read(path: string): string | null;
+  /**
+   * Записать текст в UTF-8, создав папки. Запись в папку своего плагина не
+   * вызывает горячую перезагрузку, но данные лучше держать в dzg.plugin.dataDir.
+   */
+  write(path: string, text: string): boolean;
+  list(path: string): string[];
+  exists(path: string): boolean;
+}
+
+interface DzgClipboard {
+  get(): string;
+  set(text: string): void;
+}
+
+interface Dzg {
+  readonly version: 2;
+  readonly plugin: PluginInfo;
+  readonly app: AppInfo;
+
+  /**
+   * Подписаться на событие; возвращает функцию отписки. Клиент присылает
+   * плагину только события, на которые есть обработчик. События сообщений,
+   * реакций, статусов, «печатает…», непрочитанных, фокуса, поля ввода и
+   * plugins.changed приходят на следующей итерации цикла событий; ready,
+   * unload, session.ready, chat.opened, settings.changed и theme.changed —
+   * сразу. Каждый вызов обработчика должен уложиться в 3 секунды.
+   */
+  on<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
+  off<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): void;
+  once<K extends keyof EventMap>(event: K, handler: (data: EventMap[K]) => void): () => void;
+
+  log(...args: unknown[]): void;
+  /**
+   * CommonJS-модуль из папки плагина: `module.exports` файла, путь от папки плагина.
+   * Модуль выполняется один раз и кешируется. В ES-модулях удобнее `import`.
+   */
+  require<T = any>(path: string): T;
+  /** Постоянное хранилище плагина: tdata/plugins_data/<id>.json. */
+  storage: DzgStorage;
+  /** Настройки плагина из схемы `settings` в manifest.json. */
+  settings: DzgSettings;
+
+  ui: DzgUi;
+
+  theme: DzgTheme;
+
+  chats: DzgChats;
+
+  messages: DzgMessages;
+
+  commands: DzgCommands;
+
+  http: DzgHttp;
+
+  fs: DzgFs;
+
+  clipboard: DzgClipboard;
+
+  openUrl(url: string): void;
+}
+
+declare const dzg: Dzg;
+
+declare const console: {
+  log(...args: unknown[]): void;
+  info(...args: unknown[]): void;
+  debug(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+};
+
+declare function setTimeout(fn: (...args: any[]) => void, ms?: number, ...args: any[]): number;
+declare function setInterval(fn: (...args: any[]) => void, ms?: number, ...args: any[]): number;
+declare function clearTimeout(id: number): void;
+declare function clearInterval(id: number): void;
+declare function queueMicrotask(fn: () => void): void;
+```
+
+
+## docs/plugins/types/app.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль app (apiVersion 2).
+// Дополняет dzg.app из core.d.ts: язык интерфейса, ночной режим, перезапуск.
+// Исходник: Telegram/SourceFiles/damza/plugins/api/api_app.cpp.
+// Автор: @wetakush (https://t.me/wetakush).
+
+/** Язык интерфейса клиента. */
+interface AppLanguage {
+  /** Код языка: 'ru', 'en', 'de'... Для своих языковых пакетов — их id. */
+  id: string;
+  /** Базовый язык пакета ('' если нет): для 'ru-custom' — 'ru'. */
+  baseId: string;
+  /** Название языка на нём самом: 'Русский', 'English'. */
+  name: string;
+}
+
+interface AppInfo {
+  /** Текущий язык интерфейса. */
+  language(): AppLanguage;
+  /** Включён ли ночной режим (тёмная тема). */
+  isNightMode(): boolean;
+  /**
+   * Включить или выключить ночной режим. Переключение происходит чуть
+   * позже (после текущего обработчика), затем приходит 'theme.changed'.
+   */
+  setNightMode(night: boolean): void;
+  /** Перезапустить клиент. */
+  restart(): void;
+}
+
+interface EventMap {
+  /**
+   * Сменилась палитра: включили или выключили ночной режим, применили другую
+   * тему. Цвета плагинов (dzg.theme) клиент сам наложит на новую палитру на
+   * следующей итерации цикла событий.
+   */
+  'theme.changed': { night: boolean };
+}
+```
+
+
+## docs/plugins/types/messages.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль messages (apiVersion 2).
+// Дополняет Message и DzgMessages из core.d.ts: форматированная отправка
+// (Markdown / HTML), история и поиск на сервере, пересылка, реакции,
+// закрепление, файлы, ссылки на сообщения и inline-кнопки ботов.
+// Автор модуля: @wetakush (https://t.me/wetakush).
+
+/**
+ * Тип сущности форматирования. Имена как в Bot API, только camelCase.
+ * Ссылки, упоминания, хэштеги и команды клиент находит в тексте сам.
+ */
+type MessageEntityType =
+  | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler'
+  | 'code' | 'pre' | 'blockquote'
+  | 'textLink' | 'textMention' | 'customEmoji'
+  | 'url' | 'email' | 'phone' | 'bankCard'
+  | 'mention' | 'hashtag' | 'cashtag' | 'botCommand'
+  | 'mediaTimestamp' | 'formattedDate'
+  | 'subscript' | 'superscript' | 'marked';
+
+/** Кусок форматирования. offset и length — в UTF-16 (как String.length в JS). */
+interface MessageEntity {
+  type: MessageEntityType | string;
+  offset: number;
+  length: number;
+  /** textLink: адрес ссылки. */
+  url?: string;
+  /** textMention: id пользователя (PeerId). */
+  userId?: PeerId;
+  /** pre: язык блока кода. */
+  language?: string;
+  /** customEmoji: id документа премиум-эмодзи. */
+  documentId?: string;
+  /** blockquote: свёрнутая (раскрывающаяся) цитата. */
+  collapsed?: boolean;
+}
+
+/** Текст и форматирование — результат parse(), вход format(). */
+interface FormattedText {
+  text: string;
+  entities: MessageEntity[];
+}
+
+type TextParseMode = 'markdown' | 'md' | 'html' | 'none';
+
+/** Вид inline-кнопки или кнопки клавиатуры бота. */
+type MessageButtonKind =
+  | 'text' | 'url' | 'callback' | 'callbackWithPassword'
+  | 'requestPhone' | 'requestLocation' | 'requestPoll' | 'requestPeer'
+  | 'switchInline' | 'switchInlineSame' | 'game' | 'buy' | 'auth'
+  | 'userProfile' | 'webView' | 'simpleWebView' | 'copyText' | 'disabled'
+  | 'other';
+
+interface MessageButton {
+  text: string;
+  /** Грубый тип из контракта API. Точный — в kind. */
+  type: 'url' | 'callback' | 'other';
+  kind: MessageButtonKind;
+  /** url, webView, simpleWebView, auth. */
+  url?: string;
+  /** callback: данные кнопки (как строка UTF-8). */
+  data?: string;
+  /** copyText: текст, который кнопка копирует. */
+  copyText?: string;
+}
+
+interface MessageReaction {
+  /** Эмодзи ('👍'), id премиум-эмодзи ('5368324170671202286') или 'paid' для звёзд. */
+  emoji: string;
+  count: number;
+  /** Эту реакцию поставил ты. */
+  chosen: boolean;
+  customEmojiId?: string;
+  paid?: boolean;
+}
+
+interface MessageMediaInfo {
+  fileName?: string;
+  mime?: string;
+  /** Байты. */
+  size?: number;
+  /** Секунды (аудио, видео, голосовые, кружки). */
+  duration?: number;
+  width?: number;
+  height?: number;
+  /** id документа (файлы, видео, стикеры...). */
+  documentId?: string;
+  /** id фото. */
+  photoId?: string;
+  /** Медиа скрыто под спойлером. */
+  spoiler?: boolean;
+}
+
+interface MessageForward {
+  /** Имя автора оригинала (или подпись скрытого отправителя). */
+  name: string;
+  /** Есть, если автор оригинала известен клиенту. */
+  peerId?: PeerId;
+  /** Дата оригинала, unix time. */
+  date: number;
+  /** id оригинала в канале-источнике. */
+  messageId?: number;
+  /** Подпись автора поста в канале. */
+  postAuthor?: string;
+  /** Сообщение импортировано из другого мессенджера. */
+  imported?: boolean;
+}
+
+interface Message {
+  /** Форматирование текста. */
+  entities: MessageEntity[];
+  /** Дата последнего изменения, 0 — не редактировалось. */
+  editDate: number;
+  /** id альбома, '' — не в альбоме. */
+  groupedId: string;
+  /** Есть у пересланных сообщений. */
+  forwardFrom?: MessageForward;
+  /** Подробности о файле или фото (если есть media). */
+  mediaInfo?: MessageMediaInfo;
+  /** Кнопки бота: строки, в строке — кнопки слева направо. */
+  buttons?: MessageButton[][];
+  /** Реакции под сообщением. */
+  reactions?: MessageReaction[];
+  /** id темы форума (только в форумах). */
+  topicId?: number;
+}
+
+interface MessagesSendOptions {
+  /** Ответ на сообщение: id или сам Message. */
+  replyTo?: number | Message;
+  /** Тема форума, в которую отправить. */
+  topicId?: number;
+  /** Без звука у получателей. */
+  silent?: boolean;
+  /** Пропустить сообщение через onBeforeSend и команды плагинов. По умолчанию false. */
+  runHooks?: boolean;
+  /** Разметка текста. По умолчанию 'none' — текст как есть. */
+  parse?: TextParseMode;
+  /** Отложенная отправка: unix time (секунды), миллисекунды или Date. */
+  scheduleDate?: number | Date;
+  /** Не показывать превью ссылок. */
+  noWebpage?: boolean;
+  /** Готовое форматирование. Добавляется к тому, что дал parse. */
+  entities?: MessageEntity[];
+}
+
+interface MessagesEditOptions {
+  parse?: TextParseMode;
+  noWebpage?: boolean;
+  entities?: MessageEntity[];
+}
+
+interface MessagesHistoryOptions {
+  /** Сколько сообщений, по умолчанию 50. Больше 100 — догрузит страницами. */
+  limit?: number;
+  /** Брать сообщения старше этого id (0 — с самого нового). */
+  offsetId?: number | Message;
+  /** Сдвиг от offsetId. Отрицательный — взять более новые (тогда не больше 100). */
+  addOffset?: number;
+  /** Брать сообщения старше этой даты. */
+  offsetDate?: number | Date;
+  /** Только id больше minId. */
+  minId?: number;
+  /** Только id меньше maxId. */
+  maxId?: number;
+}
+
+interface MessagesIterateOptions {
+  /** Всего сообщений, по умолчанию — вся история. */
+  limit?: number;
+  /** Размер страницы, до 100. */
+  batch?: number;
+  /** Начать со старших, чем этот id. */
+  offsetId?: number | Message;
+}
+
+type MessagesSearchFilter =
+  | 'photo' | 'video' | 'photoVideo' | 'document' | 'url' | 'gif'
+  | 'voice' | 'music' | 'roundVideo' | 'roundVoice' | 'mentions'
+  | 'pinned' | 'geo' | 'contacts' | 'chatPhotos' | 'poll';
+
+interface MessagesSearchOptions {
+  /** По умолчанию 50. Больше 100 — догрузит страницами. */
+  limit?: number;
+  /** Только сообщения этого отправителя (в «Избранном» — из этого чата). */
+  from?: PeerId | Peer;
+  filter?: MessagesSearchFilter;
+  /** Тема форума. */
+  topicId?: number;
+  minDate?: number | Date;
+  maxDate?: number | Date;
+  offsetId?: number;
+  addOffset?: number;
+  /** Только глобальный поиск: 0 — основной список, 1 — архив. */
+  folder?: number;
+  /** Только глобальный поиск: искать только в каналах, группах или личках. */
+  type?: 'channels' | 'groups' | 'users';
+}
+
+interface MessagesForwardOptions {
+  silent?: boolean;
+  /** Переслать без автора (как копию). */
+  dropAuthor?: boolean;
+  /** Без автора и без подписей к медиа. */
+  dropCaptions?: boolean;
+  scheduleDate?: number | Date;
+  /** Тема форума в чате назначения. */
+  topicId?: number;
+}
+
+interface MessagesSendFileOptions {
+  /** Подпись. Ставится к последнему файлу (к первому, если это альбом фото и видео). */
+  caption?: string;
+  /** Разметка подписи. */
+  parse?: TextParseMode;
+  entities?: MessageEntity[];
+  /** Отправить файлом, без сжатия. */
+  asDocument?: boolean;
+  /** Несколько файлов — альбомом (по умолчанию true). */
+  album?: boolean;
+  /** Скрыть фото и видео под спойлер. */
+  spoiler?: boolean;
+  replyTo?: number | Message;
+  topicId?: number;
+  silent?: boolean;
+  scheduleDate?: number | Date;
+}
+
+interface MessagesButtonAnswer {
+  /** Ответ бота (всплывающий текст). */
+  answer?: string;
+  /** Ссылка: у url-кнопки или из ответа бота. */
+  url?: string;
+  /** Бот просил показать ответ окном, а не всплывашкой. */
+  alert?: boolean;
+}
+
+interface DzgMessages {
+  send(peer: PeerId | Peer, text: string, options?: MessagesSendOptions): boolean;
+  /** Изменить текст. Возвращает false, если сообщение не найдено, ещё не отправлено или это предложенный пост, ждущий ответа. */
+  edit(peer: PeerId | Peer, messageId: number, text: string, options?: MessagesEditOptions): boolean;
+
+  /** Разобрать Markdown (по умолчанию) или HTML в текст и форматирование. */
+  parse(text: string, mode?: TextParseMode): FormattedText;
+  /** Обратно: текст и форматирование в HTML (по умолчанию) или Markdown. */
+  format(message: FormattedText | Message, mode?: 'html' | 'markdown' | 'md'): string;
+  format(text: string, mode: 'html' | 'markdown' | 'md', entities: MessageEntity[]): string;
+
+  /** История с сервера, от старых к новым. */
+  history(peer: PeerId | Peer, options?: MessagesHistoryOptions): Promise<Message[]>;
+  /** Вся история страницами, от новых к старым: for await (const m of dzg.messages.iterate(chat)). */
+  iterate(peer: PeerId | Peer, options?: MessagesIterateOptions): AsyncGenerator<Message, void, void>;
+  /** Поиск в чате или по всем чатам (peer = null). Результат от старых к новым. */
+  search(peer: PeerId | Peer | null, query: string, options?: MessagesSearchOptions): Promise<Message[]>;
+  /** Сообщение с сервера, даже если клиент его не загружал. */
+  fetch(peer: PeerId | Peer, messageId: number): Promise<Message | null>;
+  fetch(peer: PeerId | Peer, messageIds: number[]): Promise<Message[]>;
+
+  /** Переслать одно или несколько сообщений в другой чат. Служебные (и звонки) и неотправленные пропускаются; если переслать нечего — MESSAGE_NOT_FORWARDABLE. */
+  forward(fromPeer: PeerId | Peer, ids: number | Message | (number | Message)[], toPeer: PeerId | Peer, options?: MessagesForwardOptions): Promise<void>;
+  /** Поставить реакцию. null — убрать свои реакции. Премиум-эмодзи — строкой с id. */
+  react(peer: PeerId | Peer, messageId: number, emoji: string | null, options?: { addToRecent?: boolean }): Promise<void>;
+  /** Реакции, которые можно поставить на сообщение (если оно загружено). */
+  reactions(peer: PeerId | Peer, messageId: number): string[];
+  pin(peer: PeerId | Peer, messageId: number, options?: { silent?: boolean; unpin?: boolean; oneSide?: boolean }): Promise<void>;
+  unpin(peer: PeerId | Peer, messageId: number): Promise<void>;
+  /** Прочитать чат (до конца или до tillId). Учитывает режим призрака AyuGram. */
+  markRead(peer: PeerId | Peer, options?: { tillId?: number }): boolean;
+
+  /** Отправить файл или несколько файлов (пути относительно папки плагина или абсолютные). */
+  sendFile(peer: PeerId | Peer, path: string | string[], options?: MessagesSendFileOptions): boolean;
+  /** Скачать файл или фото из сообщения. Без path — в папку загрузок клиента. Можно передать папку. */
+  download(peer: PeerId | Peer, messageId: number, path?: string): Promise<string>;
+  /** Ссылка на сообщение (t.me/...). null для личных чатов и обычных групп. */
+  link(peer: PeerId | Peer, messageId: number, options?: { thread?: boolean; private?: boolean }): string | null;
+  /** Нажать кнопку бота по позиции (строка, столбец) или по тексту. */
+  clickButton(peer: PeerId | Peer, messageId: number, row: number, column: number, options?: { open?: boolean }): Promise<MessagesButtonAnswer>;
+  clickButton(peer: PeerId | Peer, messageId: number, text: string, options?: { open?: boolean }): Promise<MessagesButtonAnswer>;
+}
+
+interface EventMap {
+  /**
+   * Кто-то поставил реакцию на твоё сообщение (новая непрочитанная реакция).
+   * Приходит на следующей итерации цикла событий.
+   */
+  'message.reaction': Message;
+}
+```
+
+
+## docs/plugins/types/chats.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль chats (apiVersion 2).
+// Дополняет DzgChats из core.d.ts: список чатов, папки, вход и выход,
+// уведомления, архив, закрепление, «печатает…», участники и полная информация.
+// Автор модуля: @wetakush (https://t.me/wetakush).
+
+/**
+ * Действие «печатает…».
+ * В setTyping можно передать любое, кроме 'import_history'
+ * (его присылает только сервер, когда кто-то импортирует историю).
+ */
+type TypingAction =
+  | 'typing' | 'cancel'
+  | 'record_video' | 'upload_video'
+  | 'record_voice' | 'upload_voice'
+  | 'record_round' | 'upload_round'
+  | 'upload_photo' | 'upload_document'
+  | 'choose_location' | 'choose_contact' | 'choose_sticker'
+  | 'play_game' | 'import_history';
+
+/** Чат в списке чатов: Peer плюс счётчики и состояние. */
+interface ChatListEntry extends Peer {
+  /** Непрочитанные сообщения. */
+  unread: number;
+  /** Чат вручную помечен непрочитанным. */
+  unreadMark: boolean;
+  /** Непрочитанные упоминания. */
+  mentions: number;
+  /** Непрочитанные реакции на твои сообщения. */
+  reactions: number;
+  /** Закреплён в той папке, из которой взят список (для entry() — в основном списке). */
+  pinned: boolean;
+  /** Уведомления выключены. */
+  muted: boolean;
+  /** Чат в архиве. */
+  archived: boolean;
+  /** Последнее сообщение, если клиент его знает. */
+  lastMessage: Message | null;
+}
+
+/** Папка чатов (фильтр). Папка «Все чаты» сюда не входит: это folder 0. */
+interface ChatFolder {
+  id: number;
+  title: string;
+  /** Эмодзи-иконка папки или ''. */
+  emoji: string;
+  /** Папка добавлена по ссылке-приглашению (chatlist). */
+  chatlist: boolean;
+}
+
+interface ChatListOptions {
+  /** id папки из folders(), 'archive' — архив, 0 или не задано — основной список. */
+  folder?: number | 'archive';
+  /** Сколько чатов вернуть, по умолчанию 100. 0 — все, что загружены. */
+  limit?: number;
+  /** Только чаты с непрочитанными или с пометкой «непрочитано». */
+  unreadOnly?: boolean;
+  /** Только чаты этого типа (или типов). */
+  type?: Peer['type'] | Peer['type'][];
+}
+
+type ChatMemberRole = 'creator' | 'admin' | 'member' | 'restricted' | 'left' | 'banned';
+
+/** Участник группы или канала. */
+interface ChatMember extends Peer {
+  role: ChatMemberRole;
+  /** Должность (подпись админа или участника), если задана. */
+  rank?: string;
+}
+
+interface ChatMembersOptions {
+  /** Сколько участников вернуть, по умолчанию 200, максимум 10000. */
+  limit?: number;
+  /** Поиск по имени и юзернейму. */
+  query?: string;
+}
+
+/** Полная информация о чате, свежая с сервера. */
+interface ChatInfo {
+  peer: Peer;
+  /** Описание группы или канала, для пользователя — био. */
+  about: string;
+  /** 0 для личных чатов. */
+  membersCount: number;
+  /** Сколько участников сейчас в сети (по данным сервера). */
+  onlineCount: number;
+  /** Основная ссылка-приглашение, если она тебе доступна, иначе ''. */
+  inviteLink: string;
+  /** Связанный чат: группа обсуждения канала или канал группы. */
+  linkedChat: Peer | null;
+  /** Медленный режим, секунды. 0 — выключен. */
+  slowmodeSeconds: number;
+  /** Ты состоишь в чате. Для личных чатов всегда true. */
+  amIn: boolean;
+  isCreator: boolean;
+  isAdmin: boolean;
+  /** Группа с темами. */
+  isForum: boolean;
+  isVerified: boolean;
+  isScam: boolean;
+  isFake: boolean;
+}
+
+interface ChatCreateOptions {
+  title: string;
+  /** 'group' (по умолчанию) — обычная группа, 'supergroup' — супергруппа, 'channel' — канал. */
+  type?: 'group' | 'supergroup' | 'channel';
+  /** Описание. */
+  about?: string;
+  /** Кого сразу пригласить. */
+  users?: (PeerId | Peer)[];
+  /** Супергруппа с темами. */
+  forum?: boolean;
+}
+
+interface InviteLinkOptions {
+  /** Unix time, когда ссылка перестанет работать. */
+  expireDate?: number;
+  /** Сколько раз по ней можно вступить. */
+  usageLimit?: number;
+  /** Название ссылки (видно только админам). */
+  title?: string;
+  /** Вступление по заявке. */
+  requestNeeded?: boolean;
+}
+
+interface DzgChats {
+  /** Все действия, которые принимает setTyping. */
+  readonly typingActions: readonly TypingAction[];
+
+  /**
+   * Чаты, которые клиент уже загрузил, в том порядке, как в списке слева
+   * (закреплённые сверху). Запросов к серверу нет.
+   */
+  list(options?: ChatListOptions): ChatListEntry[];
+  /** Состояние одного чата: счётчики, mute, архив. null, если чат неизвестен. */
+  entry(peer: PeerId | Peer): ChatListEntry | null;
+  /** Папки чатов пользователя (без «Все чаты»). */
+  folders(): ChatFolder[];
+
+  /**
+   * Найти чат или пользователя на сервере.
+   * Понимает 'durov', '@durov', 't.me/durov', 'tg://resolve?domain=durov'
+   * и номера телефонов ('+79991234567'). null, если никого нет.
+   */
+  resolve(username: string): Promise<Peer | null>;
+  /**
+   * Вступить в группу или канал по юзернейму, ссылке t.me/... или
+   * приглашению (t.me/+hash, t.me/joinchat/hash, tg://join?invite=hash).
+   * Можно передать и Peer уже известного канала.
+   * Если ты уже участник — просто вернёт чат.
+   * Ошибки — коды сервера: 'INVITE_HASH_EXPIRED', 'INVITE_REQUEST_SENT',
+   * 'CHANNELS_TOO_MUCH', 'JOIN_VERIFICATION_REQUIRED' и т.п.
+   */
+  join(usernameOrInviteLink: string | Peer): Promise<Peer>;
+  /** Выйти из группы или канала. История чата не удаляется. */
+  leave(peer: PeerId | Peer): Promise<void>;
+
+  /**
+   * Выключить уведомления.
+   * seconds: число секунд; true, 0 или не задано — навсегда; false — включить обратно.
+   */
+  mute(peer: PeerId | Peer, seconds?: number | boolean): boolean;
+  /** То же, что mute(peer, false). */
+  unmute(peer: PeerId | Peer): boolean;
+  /** Переместить в архив (по умолчанию) или вернуть из него. */
+  archive(peer: PeerId | Peer, archived?: boolean): boolean;
+  /**
+   * Закрепить или открепить чат. По умолчанию в основном списке,
+   * { folder } — в папке. При превышении лимита клиент покажет своё окно.
+   * false, если нет открытого окна аккаунта.
+   */
+  pin(peer: PeerId | Peer, pinned?: boolean, options?: { folder?: number }): boolean;
+  /** true — пометить непрочитанным, false — прочитать всё. */
+  markUnread(peer: PeerId | Peer, unread?: boolean): boolean;
+  /** Прочитать все сообщения чата (то же, что markUnread(peer, false)). */
+  markRead(peer: PeerId | Peer): boolean;
+  /**
+   * Показать собеседникам статус «печатает…» и т.п. Один вызов держит статус
+   * около 5 секунд, для долгого статуса повторяй раз в 4–5 секунд.
+   * 'cancel' снимает статус. Уважает режим призрака AyuGram.
+   * Неизвестное действие бросает TypeError.
+   */
+  setTyping(peer: PeerId | Peer, action?: TypingAction, options?: { topicId?: number }): boolean;
+
+  /** Участники группы или канала с сервера (в канале нужны права админа). */
+  members(peer: PeerId | Peer, options?: ChatMembersOptions): Promise<ChatMember[]>;
+  /** Полная информация о чате, канале или пользователе с сервера. */
+  info(peer: PeerId | Peer): Promise<ChatInfo>;
+
+  /** Создать группу, супергруппу или канал. Строка — название обычной группы. */
+  create(options: ChatCreateOptions | string): Promise<Peer>;
+  /**
+   * Пригласить пользователей. missing — id тех, кого пригласить не вышло
+   * (запретили приглашать себя в настройках приватности и т.п.).
+   */
+  addMembers(peer: PeerId | Peer, users: PeerId | Peer | (PeerId | Peer)[]): Promise<{ added: number; missing: PeerId[] }>;
+  /** Удалить участника. { ban: true } — ещё и заблокировать в чате (только супергруппы и каналы). */
+  kick(peer: PeerId | Peer, user: PeerId | Peer, options?: { ban?: boolean }): Promise<void>;
+  /** Переименовать группу или канал. */
+  setTitle(peer: PeerId | Peer, title: string): Promise<void>;
+  /** Поменять описание группы или канала. */
+  setAbout(peer: PeerId | Peer, about: string): Promise<void>;
+  /** Создать новую ссылку-приглашение. Возвращает ссылку. */
+  createInviteLink(peer: PeerId | Peer, options?: InviteLinkOptions): Promise<string>;
+  /** Очистить историю. { revoke: true } — удалить и у собеседника (где это возможно). */
+  clearHistory(peer: PeerId | Peer, options?: { revoke?: boolean }): boolean;
+}
+
+interface EventMap {
+  /**
+   * Кто-то печатает, записывает голосовое, выбирает стикер...
+   * Повторы одного действия приходят не чаще раза в 4 секунды.
+   * Когда действие закончилось (явно или по таймауту ~6.5 с), приходит action 'cancel'.
+   * Только для активного аккаунта.
+   */
+  'chat.typing': { chat: Peer; user: Peer; action: TypingAction; topicId: number };
+  /**
+   * Изменилось число непрочитанных в чате или пометка «непрочитано».
+   * Изменения собираются пачкой за 300 мс, одинаковые значения не повторяются.
+   */
+  'chat.unread': { chat: Peer; unread: number; unreadMark: boolean; mentions: number };
+}
+```
+
+
+## docs/plugins/types/users.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модули users и accounts (apiVersion 2).
+// Автор модуля: @wetakush (https://t.me/wetakush).
+
+/**
+ * Вид статуса:
+ * - online — в сети;
+ * - offline — был(а) в сети в lastSeen;
+ * - recently / lastWeek / lastMonth / longAgo — время скрыто, известен только порядок;
+ * - hidden — неизвестно.
+ */
+type UserStatusKind =
+  | 'online' | 'offline' | 'recently' | 'lastWeek' | 'lastMonth' | 'longAgo' | 'hidden';
+
+interface UserStatus {
+  online: boolean;
+  /** Unix time последнего визита; когда в сети — текущее время; 0, если скрыто. */
+  lastSeen: number;
+  kind: UserStatusKind;
+  /** Готовая строка на языке клиента: «в сети», «был(а) недавно»... */
+  text: string;
+}
+
+interface UserInfo {
+  peer: Peer;
+  /** Био ('' если нет). */
+  bio: string;
+  /** Телефон без '+', если виден. */
+  phone: string;
+  firstName: string;
+  lastName: string;
+  isContact: boolean;
+  isPremium: boolean;
+  isBot: boolean;
+  isVerified: boolean;
+  isScam: boolean;
+  isFake: boolean;
+  /** Ты заблокировал этого пользователя. */
+  isBlocked: boolean;
+  /** Сколько у вас общих групп. */
+  commonChats: number;
+  status: UserStatus;
+  /** День рождения, если пользователь его показывает. year = 0, если год скрыт. */
+  birthday: { day: number; month: number; year: number } | null;
+}
+
+interface DzgUsers {
+  /** Ты сам (активный аккаунт). null до входа в аккаунт. */
+  self(): Peer | null;
+  /** Peer по id. То же, что dzg.chats.get. */
+  get(peer: PeerId | Peer): Peer | null;
+  /** Текущий статус из памяти клиента, без запроса. null, если это не пользователь. */
+  status(peer: PeerId | Peer): UserStatus | null;
+  /** Заблокирован ли пользователь (по данным клиента). */
+  isBlocked(peer: PeerId | Peer): boolean;
+  /** Полная информация с сервера (users.getFullUser). */
+  info(peer: PeerId | Peer): Promise<UserInfo>;
+  /** Контакты, которые загрузил клиент. */
+  contacts(): Peer[];
+  /** Заблокировать (по умолчанию) или разблокировать. */
+  block(peer: PeerId | Peer, blocked?: boolean): Promise<void>;
+  /** То же, что block(peer, false). */
+  unblock(peer: PeerId | Peer): Promise<void>;
+  /** Общие группы и каналы, до 100. */
+  commonChats(peer: PeerId | Peer, options?: { limit?: number }): Promise<Peer[]>;
+  /**
+   * Добавить в контакты или переименовать контакт. Пустые поля берутся из профиля.
+   * sharePhone — показать этому человеку свой номер.
+   */
+  addContact(peer: PeerId | Peer, options?: { firstName?: string; lastName?: string; phone?: string; sharePhone?: boolean }): Promise<void>;
+  /** Удалить из контактов. */
+  deleteContact(peer: PeerId | Peer): Promise<void>;
+}
+
+interface AccountEntry {
+  /** Номер аккаунта в клиенте. Не обязательно идёт подряд. */
+  index: number;
+  self: Peer;
+  active: boolean;
+  premium: boolean;
+}
+
+interface DzgAccounts {
+  /** Аккаунты, в которые выполнен вход. */
+  list(): AccountEntry[];
+  /** Активный аккаунт. */
+  current(): AccountEntry | null;
+  /**
+   * Переключиться на аккаунт. Переключение происходит чуть позже,
+   * после него придёт событие 'session.ready' (если аккаунт открыт впервые)
+   * и API начнёт работать с новым аккаунтом.
+   * false, если аккаунта с таким index нет.
+   */
+  switchTo(index: number | AccountEntry): boolean;
+}
+
+interface Dzg {
+  users: DzgUsers;
+  accounts: DzgAccounts;
+}
+
+interface EventMap {
+  /**
+   * Пользователь появился в сети или вышел из неё (только активный аккаунт).
+   * Повторные одинаковые статусы отбрасываются. Первые 15 секунд после
+   * входа в аккаунт приходят только изменения уже известных статусов,
+   * чтобы загрузка списка чатов не завалила плагин событиями.
+   */
+  'user.status': { user: Peer; online: boolean; lastSeen: number; kind: UserStatusKind };
+}
+```
+
+
+## docs/plugins/types/ui.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — расширения модуля ui (apiVersion 2).
+// Дополняет DzgUi и DzgMessages из core.d.ts: кнопки в шапке чата и у поля
+// ввода, пункты главного меню, горячие клавиши, уведомления, ссылки,
+// поле ввода, боковые панели и подмена текста сообщений при отрисовке.
+// Автор модуля: @wetakush (https://t.me/wetakush).
+
+/**
+ * Имя иконки из встроенного набора клиента. Полный список — dzg.ui.icons().
+ * Неизвестное имя не ломает кнопку: в лог пишется предупреждение,
+ * вместо иконки рисуется 'customize' (если нет текста).
+ */
+type DzgIconName =
+  | 'search' | 'settings' | 'customize' | 'edit' | 'delete' | 'clear' | 'copy'
+  | 'link' | 'links' | 'pin' | 'unpin' | 'mute' | 'unmute' | 'sound' | 'soundOff'
+  | 'silent' | 'archive' | 'unarchive' | 'info' | 'help' | 'stats' | 'bot' | 'code'
+  | 'experimental' | 'star' | 'fave' | 'like' | 'premium' | 'gift' | 'bell' | 'lock'
+  | 'user' | 'users' | 'addUser' | 'admin' | 'username' | 'channel' | 'chat' | 'chats'
+  | 'topics' | 'discussion' | 'saved' | 'folder' | 'addToFolder' | 'photo' | 'video'
+  | 'gif' | 'file' | 'download' | 'upload' | 'reply' | 'forward' | 'send' | 'share'
+  | 'translate' | 'palette' | 'night' | 'font' | 'draw' | 'spoiler' | 'plus' | 'close'
+  | 'check' | 'markRead' | 'markUnread' | 'timer' | 'schedule' | 'hourglass'
+  | 'location' | 'poll' | 'todo' | 'sticker' | 'emoji' | 'reactions' | 'phone' | 'qr'
+  | 'block' | 'report' | 'restore' | 'leave' | 'network' | 'devices' | 'permissions'
+  | 'manage' | 'shortcut' | 'newWindow' | 'expand' | 'collapse' | 'zoomIn' | 'zoomOut'
+  | 'reorder' | 'storage' | 'power' | 'tag' | 'shop' | 'ghost' | 'streamer';
+
+/** Кнопка в шапке чата (справа, рядом с поиском и звонком). */
+interface TopBarButtonSpec {
+  /** Иконка. Нужна иконка или текст. */
+  icon?: DzgIconName | string;
+  /** Короткий текст вместо иконки, например 'Аа' или 'GPT'. */
+  text?: string;
+  /** Подсказка при наведении. */
+  tooltip?: string;
+  /**
+   * Показывать кнопку в этом чате? Вызывается синхронно при каждом
+   * обновлении шапки (смена чата, выделение...), поэтому должна быть быстрой.
+   * Нет функции — кнопка видна во всех чатах.
+   */
+  when?(chat: Peer): boolean;
+  onClick(chat: Peer): void;
+}
+
+/** Кнопка у поля ввода (справа, рядом с эмодзи и «запланированными»). */
+interface ComposeButtonSpec {
+  icon?: DzgIconName | string;
+  text?: string;
+  tooltip?: string;
+  /** chat — чат, в котором открыто поле, или null. */
+  onClick(chat: Peer | null): void;
+}
+
+interface MainMenuItemSpec {
+  title: string;
+  /** По умолчанию 'customize'. */
+  icon?: DzgIconName | string;
+  /** Меню закрывается перед вызовом. */
+  onClick(): void;
+}
+
+interface NotifySpec {
+  title?: string;
+  text: string;
+  /** Клик по уведомлению или по кнопке «Открыть». Окно клиента активируется. */
+  onClick?(): void;
+  /** Без звука и без мигания значка на панели задач. */
+  silent?: boolean;
+}
+
+interface ComposeState {
+  /** Чат, к которому относится поле, или null (например, черновик без чата). */
+  chat: Peer | null;
+  text: string;
+}
+
+interface DzgCompose {
+  /** Текущее поле ввода: в фокусе, иначе последнее, где был фокус, в активном окне. null — поля нет. */
+  get(): ComposeState | null;
+  /** Заменить весь текст поля. Курсор — в конец. false — поля нет. */
+  set(text: string): boolean;
+  /** Вставить текст в позицию курсора (заменяет выделение). */
+  insert(text: string): boolean;
+  /** Активировать окно и поставить фокус в поле. */
+  focus(): void;
+  /** Кнопка рядом с полем ввода во всех чатах, темах и ответах. */
+  addButton(spec: ComposeButtonSpec): () => void;
+}
+
+interface PanelLabelOptions {
+  /** Заголовок раздела (как в настройках). */
+  bold?: boolean;
+  /** Серый поясняющий текст. */
+  muted?: boolean;
+}
+
+interface PanelButtonOptions {
+  /**
+   * По умолчанию — заполненная кнопка на всю ширину.
+   * 'light' — светлая кнопка; 'row' — строка как в настройках.
+   * Если задан icon, кнопка всегда строка с иконкой.
+   */
+  style?: 'light' | 'row';
+  icon?: DzgIconName | string;
+}
+
+interface PanelInputOptions {
+  placeholder?: string;
+  value?: string;
+  /** Многострочное поле: отправка по Ctrl+Enter. */
+  multiline?: boolean;
+  /** Enter в однострочном поле, Ctrl+Enter в многострочном. */
+  onSubmit?(text: string, widget: Widget): void;
+  /** Каждое изменение текста. */
+  onChange?(text: string, widget: Widget): void;
+}
+
+/**
+ * Боковая панель справа в главном окне — как третья колонка.
+ * У плагина одна панель: повторный dzg.ui.panel() возвращает её же.
+ * Панели разных плагинов становятся вкладками; показана последняя открытая.
+ */
+interface Panel {
+  readonly id: number;
+  /** Вся панель (заголовок + содержимое). */
+  readonly widget: Widget;
+  /** Прокручиваемая колонка с элементами. */
+  readonly content: Widget;
+  setTitle(title: string): Panel;
+  /** 240..720 px. */
+  setWidth(width: number): Panel;
+  /** Сделать вкладку панели активной. */
+  show(): Panel;
+  scrollToBottom(): Panel;
+  /** Удалить все элементы. Обработчики старых элементов отключаются. */
+  clear(): Panel;
+  /** Текст можно менять: label.setText('...'). */
+  addLabel(text: string, options?: PanelLabelOptions): Widget | null;
+  addButton(text: string, onClick: (widget: Widget) => void, options?: PanelButtonOptions): Widget | null;
+  /** Текущий текст: widget.text(). */
+  addInput(options?: PanelInputOptions): Widget | null;
+  /** Переключатель как в настройках. */
+  addToggle(text: string, checked: boolean, onChange: (checked: boolean, widget: Widget) => void): Widget | null;
+  addSeparator(): void;
+  /** Пустое место, по умолчанию стандартный отступ. */
+  addSkip(px?: number): void;
+  /** Закрыть панель. Срабатывает on('close'). */
+  close(): void;
+  /** 'close' — панель закрыта: крестиком, close(), выгрузкой окна. */
+  on(event: 'close', handler: (panel: Panel) => void): Panel;
+  isOpen(): boolean;
+}
+
+interface PanelOptions {
+  /** По умолчанию — имя плагина. */
+  title?: string;
+  /** По умолчанию 340, допустимо 240..720. */
+  width?: number;
+}
+
+interface DzgUi {
+  /** Имена иконок для опции icon. */
+  icons(): DzgIconName[];
+  addTopBarButton(spec: TopBarButtonSpec): () => void;
+  addMainMenuItem(spec: MainMenuItemSpec): () => void;
+  /**
+   * Горячая клавиша на всё приложение, синтаксис Qt: 'Ctrl+Shift+K', 'Alt+F1', 'F8'.
+   * Только одно сочетание (без аккордов 'Ctrl+Shift+K, Ctrl+C') — иначе исключение.
+   * Без Ctrl/Alt/Meta и не F-клавиша — не срабатывает, пока фокус в текстовом поле.
+   * Сочетание плагина важнее сочетаний клиента.
+   */
+  addShortcut(keys: string, handler: () => void): () => void;
+  /** Уведомление поверх окна клиента. Строка — то же, что { text }. */
+  notify(spec: NotifySpec | string): void;
+  /** Ссылка через клиент: t.me/..., tg://..., обычные — в браузере. */
+  openLink(url: string): void;
+  /** Пересчитать when() у кнопок в шапке, если условие изменилось. */
+  refreshButtons(): void;
+  compose: DzgCompose;
+  /** Открыть (или вернуть уже открытую) боковую панель плагина. */
+  panel(options?: PanelOptions): Panel;
+}
+
+/**
+ * Возвращает текст, который показать вместо message.text, или null/undefined,
+ * чтобы оставить как есть. Меняется только отображение: сообщение, его
+ * копирование и пересылка остаются прежними. Форматирование заменённого
+ * текста сбрасывается. Если трансформаций несколько (даже из разных
+ * плагинов), они применяются по очереди: следующая получает результат
+ * предыдущей в message.text.
+ */
+type RenderTransform = (message: Message) => string | null | undefined;
+
+interface DzgMessages {
+  /**
+   * Подменить текст сообщений при отрисовке. Результат кешируется для
+   * каждого сообщения, функция вызывается снова, когда текст меняется
+   * или когда трансформации добавляются/убираются.
+   */
+  addRenderTransform(transform: RenderTransform): () => void;
+  /** Сбросить кеш и перерисовать: например, после смены настроек плагина. */
+  refreshRender(): void;
+}
+
+interface EventMap {
+  /** Окно клиента стало активным или неактивным. */
+  'app.focus': { active: boolean };
+  /** Текст в поле ввода изменился. Не чаще раза в ~300 мс. */
+  'compose.changed': { chat: Peer | null; text: string };
+}
+```
+
+
+## docs/plugins/types/api.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль api: сырой MTProto (apiVersion 2).
+// Автор модуля: @wetakush (https://t.me/wetakush).
+// Подробности и примеры: docs/plugins/api/mtproto.md.
+
+/**
+ * TL-объект в JSON. Конструктор пишется в поле `_`, остальные поля называются
+ * так же, как в api.tl (snake_case):
+ *
+ * - `int`, `double` — number;
+ * - `long` — строка с десятичным числом (`'-1001234567890'`), можно BigInt;
+ * - `string` — строка;
+ * - `bytes`, `int128`, `int256` — base64-строка (на вход можно Uint8Array,
+ *   ArrayBuffer, массив байт или `{ text: 'строка' }` — она уйдёт как UTF-8);
+ * - `Bool` — true / false;
+ * - `Vector<T>` — массив;
+ * - `flags.N?true` — true, если флаг стоит; отсутствует, если нет;
+ * - поля-флаги (`flags:#`, `flags2:#`) считаются сами и в ответах не приходят;
+ * - необязательные поля (`flags.N?T`), которых нет, просто отсутствуют.
+ */
+interface TLObject {
+  _: string;
+  [field: string]: any;
+}
+
+/** Значение, которое можно передать там, где ждут InputPeer / InputUser / InputChannel. */
+type TLInputPeerLike = TLObject | Peer | Message | PeerId | 'me' | 'self';
+
+interface ApiCallOptions {
+  /** Через сколько миллисекунд отклонить промис с ошибкой TIMEOUT и отменить запрос. 0 — ждать сколько нужно. */
+  timeout?: number;
+  /**
+   * FLOOD_WAIT не дольше стольких секунд клиент переждёт сам и повторит запрос.
+   * На более долгий промис отклоняется с ошибкой (error.seconds). По умолчанию 10, 0 — никогда не ждать.
+   */
+  floodSleep?: number;
+  /**
+   * true (по умолчанию): клиент обработает ответ так, будто запрос сделал он сам —
+   * применит Updates (сообщения появятся в чатах, придут события) и запомнит
+   * users / chats из ответа (после этого работают inputPeer() и dzg.chats.get()).
+   * false: ответ видит только плагин.
+   */
+  applyResult?: boolean;
+  /**
+   * Дата-центр, в который уйдёт запрос (для продвинутых случаев: upload.getFile
+   * файла с другого DC). Методы upload.get* без dc идут в DC аккаунта через
+   * отдельное соединение для загрузок. По умолчанию — основное соединение.
+   */
+  dc?: number;
+}
+
+/** Ошибка dzg.api.call. */
+interface ApiError extends Error {
+  /** Код ошибки Telegram: 400, 403, 420... Нет у локальных ошибок (кодирование, TIMEOUT). */
+  code?: number;
+  /** Тип ошибки: 'PEER_ID_INVALID', 'FLOOD_WAIT_30', 'TIMEOUT'... */
+  type?: string;
+  /** Для FLOOD_WAIT_X / SLOWMODE_WAIT_X: сколько секунд ждать. */
+  seconds?: number;
+}
+
+interface TLParamInfo {
+  name: string;
+  /** Тип как в api.tl, вместе с условием: 'flags.0?Vector<InputDocument>'. */
+  type: string;
+  /** Поле зависит от флага (flags.N?...). */
+  optional: boolean;
+}
+
+interface TLSchemaInfo {
+  kind: 'method' | 'constructor';
+  name: string;
+  /** Id конструктора (беззнаковое 32-битное число). */
+  id: number;
+  /** То же id в hex, 8 символов: '4423e6c5'. */
+  idHex: string;
+  params: TLParamInfo[];
+  /** Тип результата метода или тип конструктора: 'messages.Messages', 'Update'. */
+  type: string;
+}
+
+/** Второй аргумент обработчика onUpdate. */
+interface ApiUpdateMeta {
+  /** Id аккаунта (PeerId), которому пришло обновление. */
+  self: PeerId;
+}
+
+interface DzgApi {
+  /**
+   * Вызывает любой метод Telegram API: `dzg.api.call('messages.getHistory', {...})`.
+   * Поля — как в api.tl; `random_id` и `hash` можно не передавать — подставятся сами
+   * (случайный id и 0). Там, где ждут InputPeer / InputUser / InputChannel, можно
+   * передать Peer, Message, id чата или 'me'.
+   * Промис отклоняется с ApiError ('400: PEER_ID_INVALID').
+   */
+  call<T = any>(method: string, params?: Record<string, any>, options?: ApiCallOptions): Promise<T>;
+
+  /** InputPeer для чата по известному клиенту access_hash; null, если клиент его не знает. */
+  inputPeer(peer: TLInputPeerLike): TLObject | null;
+  /** InputUser; null, если это не пользователь или он неизвестен. 'me' -> inputUserSelf. */
+  inputUser(peer: TLInputPeerLike): TLObject | null;
+  /** InputChannel; null, если это не канал / супергруппа. */
+  inputChannel(peer: TLInputPeerLike): TLObject | null;
+
+  /**
+   * TL-peer -> id чата DamZaGram (PeerId) для dzg.chats.get / dzg.messages и т. п.
+   * Понимает peerUser / peerChat / peerChannel, inputPeer*, inputUser, inputChannel,
+   * а также объекты user / chat / channel из ответов. null для остального.
+   */
+  peerId(peer: TLObject | null | undefined): PeerId | null;
+
+  /**
+   * Сырые обновления от сервера (объекты типа Update): 'updateUserTyping',
+   * 'updateNewMessage'... '*' — все. Можно передать массив типов.
+   * Бросает TypeError для неизвестного типа или не-Update (например 'updateShortMessage').
+   * Возвращает функцию отписки.
+   */
+  onUpdate(type: string | string[] | '*', fn: (update: TLObject, meta: ApiUpdateMeta) => void): () => void;
+
+  /** Описание метода или конструктора из схемы; принимает и id ('0x4423e6c5'). null, если не найден. */
+  schema(name: string): TLSchemaInfo | null;
+  /** Имена конструкторов типа: constructors('InputPeer') -> ['inputPeerEmpty', 'inputPeerSelf', ...]. */
+  constructors(type: string): string[];
+  /** Поиск по именам методов и конструкторов (без учёта регистра). */
+  search(query: string, limit?: number): string[];
+
+  /** TL-объект -> base64 его бинарного представления. type по умолчанию 'Object' (любой конструктор). Бросает Error. */
+  encode(value: any, type?: string): string;
+  /** base64 / байты -> TL-объект. type: 'Object', 'Vector<long>', 'Message'... Бросает Error. */
+  decode(data: string | Uint8Array | ArrayBuffer | number[], type?: string): any;
+
+  /** Байты или строка (как UTF-8) -> base64. */
+  toBase64(data: string | Uint8Array | ArrayBuffer | number[]): string;
+  /** base64 (и base64url) -> байты, или строка при as = 'text'. */
+  fromBase64(base64: string): Uint8Array;
+  fromBase64(base64: string, as: 'text'): string;
+
+  /** Слой (layer) схемы, на котором работает клиент. */
+  readonly layer: number;
+}
+
+interface Dzg {
+  api: DzgApi;
+}
+```
+
+
+## docs/plugins/types/plugins.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль plugins (apiVersion 2).
+// Управление другими плагинами из JS: список, включение, перезагрузка,
+// установка по ссылке или пути, удаление, выполнение кода в другом плагине.
+// Автор модуля: @wetakush (https://t.me/wetakush).
+
+/** Установленный плагин, как его видит менеджер. */
+interface InstalledPlugin {
+  id: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  /** Папка плагина. */
+  dir: string;
+  /** 'module' (ES-модуль, по умолчанию) или 'script'. */
+  type: 'module' | 'script';
+  /** Пользователь включил плагин. */
+  enabled: boolean;
+  /** Плагин сейчас работает (включён и загрузился без ошибок). */
+  loaded: boolean;
+  /** Встроенный: поставляется с клиентом, удалить нельзя — только выключить. */
+  builtin: boolean;
+  /** Есть схема настроек в manifest.json. */
+  hasSettings: boolean;
+  /** Последняя ошибка ('' если всё хорошо). */
+  error: string;
+}
+
+/** Что лежит по ссылке или пути, без установки. */
+interface PluginPackageInfo {
+  id: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  /** Сколько файлов в пакете. */
+  files: number;
+  /** Суммарный размер в байтах. */
+  size: number;
+  /** Плагин из одного .js: манифест собран из шапки `// @name ...`. */
+  singleFile: boolean;
+  /** Итоговая ссылка или имя файла. */
+  source: string;
+  /** Плагин с таким id уже установлен (установка его обновит). */
+  installed: boolean;
+}
+
+interface DzgPlugins {
+  /** Папка плагинов: `<папка данных>/tdata/plugins/`. */
+  readonly path: string;
+  /** Все установленные плагины, включая выключенные. */
+  list(): InstalledPlugin[];
+  /** Плагин по id (по умолчанию — текущий) или null. */
+  get(id?: string): InstalledPlugin | null;
+  /**
+   * Включить или выключить плагин. Применяется сразу после текущего
+   * обработчика (не синхронно): менеджер не грузит и не выгружает плагины,
+   * пока на стеке JS любого плагина. false — нет такого плагина.
+   */
+  setEnabled(id: string, enabled: boolean): boolean;
+  enable(id: string): boolean;
+  disable(id: string): boolean;
+  /** Перезагрузить плагин (по умолчанию — текущий) после текущего обработчика. */
+  reload(id?: string): boolean;
+  /** Перечитать папку плагинов и перезапустить все плагины (после текущего обработчика). */
+  reloadAll(): boolean;
+  /** Последние строки лога плагина (по умолчанию 100). Пусто, если не загружен. */
+  log(id?: string, limit?: number): string[];
+  /** Текущие значения настроек плагина (с учётом значений по умолчанию). */
+  settings(id?: string): Record<string, unknown>;
+  /** Поменять настройку другого плагина; он получит событие settings.changed. */
+  setSetting(id: string, key: string, value: unknown): boolean;
+  /**
+   * Выполнить код в глобальной области другого загруженного плагина.
+   * Возвращает результат текстом (JSON, если получается), бросает Error.
+   */
+  evaluate(id: string, code: string): string;
+  /**
+   * Прочитать пакет по ссылке или пути без установки.
+   * Принимает https-ссылки на .zip/.js, страницы файлов и репозитории GitHub,
+   * file:// и абсолютные пути (папка, .zip, .js).
+   */
+  inspect(source: string): Promise<PluginPackageInfo>;
+  /**
+   * Тихо установить или обновить плагин (без окна подтверждения) и вернуть
+   * его id. Новый плагин ставится без перезапуска остальных; обновление
+   * перезапускает только обновлённый плагин (если это вызвавший плагин,
+   * промис не дождётся ответа). Для магазинов плагинов удобнее promptInstall.
+   */
+  install(source: string, options?: { enable?: boolean }): Promise<string>;
+  /**
+   * Скачать пакет и показать пользователю окно установки (манифест,
+   * предупреждение о полном доступе). Промис выполняется, когда окно показано.
+   */
+  promptInstall(source: string): Promise<void>;
+  /**
+   * Удалить плагин; остальные продолжают работать. Встроенные только
+   * выключаются. removeData: стереть storage и забыть настройки и состояние.
+   */
+  uninstall(id: string, options?: { removeData?: boolean }): Promise<void>;
+  /** Открыть раздел «Плагины» в настройках. */
+  openManager(): void;
+  /** Открыть окно DevTools (консоль + живой лог) для плагина. */
+  openDevTools(id?: string): void;
+}
+
+interface EventMap {
+  /**
+   * Список плагинов изменился: установили, удалили, включили, выключили,
+   * обновили версию. Изменения только текста ошибки не считаются.
+   */
+  'plugins.changed': { plugins: InstalledPlugin[] };
+}
+
+interface Dzg {
+  plugins: DzgPlugins;
+}
+```
+
+
+## docs/plugins/types/builtin.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль builtin (apiVersion 2).
+// Встроенные плагины и команды всех плагинов сразу.
+// Исходник: Telegram/SourceFiles/damza/plugins/api/api_builtin.cpp.
+// Автор модуля: @wetakush (https://t.me/wetakush).
+
+/** Встроенный плагин, который клиент поставляет и обновляет сам. */
+interface BuiltinPluginInfo {
+  id: string;
+  name: string;
+  /** Версия, вшитая в клиент. */
+  version: string;
+  /** Версия в tdata/plugins/<id>/ ('' если не установлен). */
+  installedVersion: string;
+  /** Включается сам при первом запуске (пользователь может выключить). */
+  enabledByDefault: boolean;
+  /** Пользователь заменил плагин своим (в manifest.json нет "builtin": true) — клиент его не трогает. */
+  replaced: boolean;
+  /** Установлен или обновлён при этом запуске. */
+  updated: boolean;
+  /** Ошибка установки ('' если всё хорошо). */
+  error: string;
+}
+
+/** Команда любого загруженного плагина. */
+interface PluginCommandInfo {
+  name: string;
+  description: string;
+  /** id плагина, который зарегистрировал команду. */
+  plugin: string;
+  pluginName: string;
+}
+
+interface DzgCommands {
+  /** Команды всех загруженных плагинов, включая свои. */
+  all(): PluginCommandInfo[];
+  /**
+   * Выполнить команду любого плагина так, будто пользователь отправил её в чат.
+   * text: '/stats 500' или 'stats 500'. chat: чат-контекст, по умолчанию текущий.
+   * false — такой команды нет или её плагин сейчас занят.
+   */
+  run(text: string, chat?: Peer | PeerId): boolean;
+}
+
+interface DzgBuiltin {
+  /** Встроенные плагины и их состояние после установки на старте. */
+  list(): BuiltinPluginInfo[];
+}
+
+interface Dzg {
+  builtin: DzgBuiltin;
+}
+```
+
+
+## docs/plugins/types/wallet.d.ts
+
+```ts
+// Типы API плагинов DamZaGram — модуль wallet (apiVersion 2).
+// Балансы Telegram Stars и TON активного аккаунта.
+// Исходник: Telegram/SourceFiles/damza/plugins/api/api_wallet.cpp.
+// Автор: @wetakush (https://t.me/wetakush).
+
+/** Балансы активного аккаунта, как их сейчас показывает клиент. */
+interface WalletBalances {
+  /** Звёзды Telegram Stars (дробная часть — нано-звёзды). */
+  stars: number;
+  /** TON. */
+  ton: number;
+  /** Клиент уже получил баланс Stars с сервера. */
+  starsLoaded: boolean;
+  /** Клиент уже получил баланс TON с сервера. */
+  tonLoaded: boolean;
+}
+
+interface DzgWallet {
+  /** Текущие балансы; null — нет активного аккаунта. */
+  get(): WalletBalances | null;
+  /**
+   * Поменять баланс только в этом клиенте (визуально). На сервере ничего не
+   * меняется: следующее обновление с сервера или refresh() вернёт настоящий
+   * баланс, после него придёт 'wallet.changed'. Отрицательные и нечисловые
+   * значения — RangeError.
+   */
+  setLocal(values: { stars?: number; ton?: number }): boolean;
+  /** Перезапросить настоящие балансы с сервера. */
+  refresh(): boolean;
+}
+
+interface Dzg {
+  /** Балансы Stars и TON. */
+  wallet: DzgWallet;
+}
+
+interface EventMap {
+  /**
+   * Баланс Stars или TON активного аккаунта изменился (с сервера или через
+   * setLocal). Приходит на следующей итерации цикла событий.
+   */
+  'wallet.changed': WalletBalances;
+}
+```
