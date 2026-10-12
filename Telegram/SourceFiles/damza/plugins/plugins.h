@@ -30,6 +30,14 @@ namespace Data {
 struct UniqueGift;
 } // namespace Data
 
+namespace Data {
+struct CreditsStatusSlice;
+} // namespace Data
+
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace Damza::Plugins {
 
 // Called once the primary window has been shown.
@@ -60,5 +68,13 @@ void FillPeerMenu(PeerData *peer, const Ui::Menu::MenuCallback &addAction);
 [[nodiscard]] bool InterceptGiftOffer(
 	std::shared_ptr<ChatHelpers::Show> show,
 	std::shared_ptr<Data::UniqueGift> unique);
+
+// Prepends plugin-provided fake entries to a Stars transactions list.
+// `in` / `out` say which directions this list shows (full tab: both).
+void InjectCreditsHistory(
+	not_null<Main::Session*> session,
+	Data::CreditsStatusSlice &slice,
+	bool in,
+	bool out);
 
 } // namespace Damza::Plugins

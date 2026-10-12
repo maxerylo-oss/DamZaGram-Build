@@ -1,14 +1,21 @@
 {
   "id": "fake-balance",
   "name": "Подмена баланса",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "@wetakush",
-  "description": "Показывает в клиенте любой баланс Telegram Stars и TON. Меняется только отображение у тебя: настоящий баланс на сервере не трогается и возвращается при выключении.",
+  "description": "Показывает в клиенте любой баланс Telegram Stars и TON и может добавить фейковую запись в историю транзакций. Меняется только отображение у тебя: на сервере ничего не трогается.",
   "settings": [
     { "key": "enabled", "type": "bool", "title": "Подменять баланс", "default": true },
     { "key": "stars", "type": "number", "title": "Звёзды (Stars)", "default": 100000 },
     { "key": "ton", "type": "number", "title": "TON", "default": 1000 },
     { "key": "applyStars", "type": "bool", "title": "Подменять Stars", "default": true },
-    { "key": "applyTon", "type": "bool", "title": "Подменять TON", "default": true }
+    { "key": "applyTon", "type": "bool", "title": "Подменять TON", "default": true },
+    { "key": "histEnabled", "type": "bool", "title": "Запись в истории Stars", "default": false },
+    { "key": "histTitle", "type": "string", "title": "Запись: название", "default": "" },
+    { "key": "histDescription", "type": "string", "title": "Запись: описание", "default": "" },
+    { "key": "histAmount", "type": "number", "title": "Запись: сумма", "default": 1000 },
+    { "key": "histCurrency", "type": "select", "title": "Запись: валюта", "default": "stars", "options": [ { "value": "stars", "title": "Stars" }, { "value": "ton", "title": "TON" } ] },
+    { "key": "histUsername", "type": "string", "title": "Запись: @username для аватарки", "default": "" },
+    { "key": "histIncoming", "type": "bool", "title": "Запись: входящая (+)", "default": true }
   ]
 }

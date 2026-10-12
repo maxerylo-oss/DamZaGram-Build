@@ -42,6 +42,30 @@ function restore() {
   dzg.wallet.refresh();
 }
 
+// --- Фейковая запись в истории Stars ---------------------------------------
+
+function applyHistory() {
+  if (!dzg.wallet.setHistory) return; // старый клиент без поддержки
+  if (!setting('histEnabled', false) || !String(setting('histTitle', '')).trim()) {
+    dzg.wallet.setHistory([]);
+    return;
+  }
+  const build = (peer) => dzg.wallet.setHistory([{
+    title: String(setting('histTitle', '')),
+    description: String(setting('histDescription', '')),
+    amount: Math.max(0, Number(setting('histAmount', 0)) || 0),
+    currency: setting('histCurrency', 'stars'),
+    peer: peer || undefined,
+    incoming: setting('histIncoming', true) !== false,
+  }]);
+  const uname = String(setting('histUsername', '')).replace(/^@+/, '').trim();
+  const self = dzg.users.self();
+  if (!uname) { build(self); return; }
+  const found = dzg.chats.find(uname);
+  if (found) { build(found); return; }
+  dzg.chats.resolve(uname).then((r) => build(r || self)).catch(() => build(self));
+}
+
 const format = (value) => {
   const number = Number(value) || 0;
   return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/\.?0+$/, '');
@@ -79,6 +103,16 @@ function render() {
   });
   panel.addLabel('Enter в поле — сохранить.', { muted: true });
   panel.addSeparator();
+  panel.addLabel('Фейковая запись в истории Stars', { bold: true });
+  panel.addToggle('Показывать запись', !!setting('histEnabled', false), (v) => dzg.settings.set('histEnabled', !!v));
+  panel.addInput({ placeholder: 'Название', value: String(setting('histTitle', '')), onSubmit: (t) => dzg.settings.set('histTitle', String(t)) });
+  panel.addInput({ placeholder: 'Описание', value: String(setting('histDescription', '')), onSubmit: (t) => dzg.settings.set('histDescription', String(t)) });
+  panel.addInput({ placeholder: 'Сумма', value: format(setting('histAmount', 0)), onSubmit: (t) => saveNumber('histAmount', t) });
+  panel.addInput({ placeholder: '@username для аватарки (необязательно)', value: String(setting('histUsername', '')), onSubmit: (t) => dzg.settings.set('histUsername', String(t)) });
+  panel.addToggle('В TON (иначе Stars)', setting('histCurrency', 'stars') === 'ton', (v) => dzg.settings.set('histCurrency', v ? 'ton' : 'stars'));
+  panel.addToggle('Входящая (+), иначе исходящая (−)', setting('histIncoming', true) !== false, (v) => dzg.settings.set('histIncoming', !!v));
+  panel.addLabel('Открой Настройки → Звёзды, чтобы увидеть запись.', { muted: true });
+  panel.addSeparator();
   const real = dzg.wallet.get();
   panel.addButton('Показать настоящий баланс', () => {
     dzg.settings.set('enabled', false);
@@ -105,8 +139,8 @@ function showPanel() {
 
 // --- События ----------------------------------------------------------------
 
-dzg.on('ready', apply);
-dzg.on('session.ready', apply);
+dzg.on('ready', () => { apply(); applyHistory(); });
+dzg.on('session.ready', () => { apply(); applyHistory(); });
 dzg.on('wallet.changed', () => {
   if (enabled()) setTimeout(apply, 0);
   render();
@@ -114,9 +148,11 @@ dzg.on('wallet.changed', () => {
 dzg.on('settings.changed', () => {
   if (enabled()) {
     apply();
+applyHistory();
   } else {
     restore();
   }
+  applyHistory();
   render();
 });
 
@@ -152,7 +188,9 @@ dzg.ui.addMainMenuItem({ title: 'Подмена баланса', icon: 'settings
 
 dzg.on('unload', () => {
   if (panel) panel.close();
+  if (dzg.wallet.setHistory) dzg.wallet.setHistory([]);
   restore();
 });
 
 apply();
+applyHistory();

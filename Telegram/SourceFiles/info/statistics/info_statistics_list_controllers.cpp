@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/statistics/info_statistics_list_controllers.h"
 
+#include "damza/plugins/plugins.h"
 #include "api/api_credits.h"
 #include "api/api_statistics.h"
 #include "boxes/peers/replace_boost_box.h" // GenerateGiftUniqueUserpicCallback
@@ -1537,6 +1538,10 @@ void AddCreditsHistoryList(
 		bool out,
 		bool subs,
 		bool currency) {
+	auto injectedSlice = firstSlice; // DamZaGram: add plugin fake entries.
+	if (!subs && !currency) {
+		Damza::Plugins::InjectCreditsHistory(&show->session(), injectedSlice, in, out);
+	}
 	struct State final {
 		State(CreditsDescriptor d) : controller(std::move(d)) {
 		}
@@ -1546,7 +1551,7 @@ void AddCreditsHistoryList(
 	};
 	const auto state = container->lifetime().make_state<State>(
 		CreditsDescriptor{
-			firstSlice,
+			injectedSlice,
 			callback,
 			bot,
 			in,
