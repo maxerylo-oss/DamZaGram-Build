@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_main.h"
 
+#include "damza/damza_lang.h"
+#include "damza/ui/settings_plugins.h"
 #include "settings/settings_common_session.h"
 
 #include "api/api_cloud_password.h"
@@ -395,6 +397,12 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		.targetSection = AyuMain::Id(),
 		.icon = { &st::menuIconPremium },
 		.keywords = { u"ayu"_q },
+	});
+	builder.addSectionButton({
+		.title = rpl::single(Damza::Text("Plugins", "Плагины")),
+		.targetSection = DamzaPlugins::Id(),
+		.icon = { &st::menuIconBotCommands },
+		.keywords = { u"plugins"_q, u"плагины"_q, u"js"_q },
 	});
 	builder.addSkip();
 	builder.addDivider();

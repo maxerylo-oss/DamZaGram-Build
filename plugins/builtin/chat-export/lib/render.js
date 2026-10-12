@@ -86,22 +86,22 @@ export function formatDuration(seconds) {
 // --- Сообщение: автор, медиа, краткий текст -------------------------------
 
 export const MEDIA = {
-  photo: ['📷', 'Фото'],
-  video: ['🎬', 'Видео'],
-  gif: ['🎞', 'GIF'],
-  sticker: ['🧩', 'Стикер'],
-  voice: ['🎤', 'Голосовое сообщение'],
-  videoNote: ['⏺', 'Видеосообщение'],
-  audio: ['🎵', 'Аудио'],
-  file: ['📎', 'Файл'],
-  poll: ['📊', 'Опрос'],
-  other: ['📦', 'Вложение'],
+  photo: ['Фото'],
+  video: ['Видео'],
+  gif: ['GIF'],
+  sticker: ['Стикер'],
+  voice: ['Голосовое сообщение'],
+  videoNote: ['Видеосообщение'],
+  audio: ['Аудио'],
+  file: ['Файл'],
+  poll: ['Опрос'],
+  other: ['Вложение'],
 };
 
-/** '📷 Фото · 1280×720 · 245 КБ', '' — если вложения нет. */
+/** '[Фото · 1280×720 · 245 КБ]', '' — если вложения нет. */
 export function mediaLabel(m) {
   if (!m || !m.media) return '';
-  const [icon, name] = MEDIA[m.media] || MEDIA.other;
+  const [name] = MEDIA[m.media] || MEDIA.other;
   const info = m.mediaInfo || {};
   const parts = [];
   if ((m.media === 'file' || m.media === 'audio') && info.fileName) parts.push(info.fileName);
@@ -111,7 +111,7 @@ export function mediaLabel(m) {
   }
   if (info.size) parts.push(formatSize(info.size));
   if (info.spoiler) parts.push('под спойлером');
-  return icon + ' ' + name + (parts.length ? ' · ' + parts.join(' · ') : '');
+  return '[' + name + (parts.length ? ' · ' + parts.join(' · ') : '') + ']';
 }
 
 export function senderName(m) {
@@ -332,7 +332,7 @@ export function messageMarkdown(m) {
 function reactionsLine(m) {
   return (Array.isArray(m.reactions) ? m.reactions : [])
     .filter((r) => r && r.count)
-    .map((r) => ((r.paid ? '⭐' : (r.customEmojiId || /^\d+$/.test(String(r.emoji)) ? '✨' : r.emoji)) + ' ' + r.count))
+    .map((r) => ((r.paid ? 'Stars' : (r.customEmojiId || /^\d+$/.test(String(r.emoji)) ? 'реакция' : r.emoji)) + ' ' + r.count))
     .join(' · ');
 }
 
@@ -418,10 +418,10 @@ export class MarkdownWriter extends Writer {
     } else {
       const link = ctx.link(m.id);
       const flags = [];
-      if (m.editDate) flags.push('✏️ изменено');
-      if (m.deleted) flags.push('🗑 удалено');
-      if (m.pinned) flags.push('📌');
-      if (m.views) flags.push('👁 ' + formatNumber(m.views));
+      if (m.editDate) flags.push('изменено');
+      if (m.deleted) flags.push('удалено');
+      if (m.pinned) flags.push('закреплено');
+      if (m.views) flags.push(formatNumber(m.views) + ' просм.');
       let head = '**' + mdEscape(senderName(m)) + '** · ' + (link ? '[' + time + '](' + link + ')' : time);
       if (flags.length) head += ' · ' + flags.join(' · ');
       if (m.forwardFrom) head += '  \n↪ Переслано от **' + mdEscape(m.forwardFrom.name || 'скрытого автора') + '**';
@@ -472,7 +472,7 @@ export class MarkdownWriter extends Writer {
     head.push('- Сообщений: **' + formatNumber(meta.count || 0) + '**');
     if (meta.first) head.push('- Период: ' + formatDate(meta.first) + ' — ' + formatDate(meta.last));
     head.push('- Экспортировано DamZaGram ' + formatDateTime((meta.exportedAt || Date.now()) / 1000));
-    if (meta.truncated) head.push('- ⚠️ ' + mdEscape(meta.truncated));
+    if (meta.truncated) head.push('- ' + mdEscape(meta.truncated));
     head.push('', '---', '');
     const empty = lines.length ? [] : ['*Нет сообщений для экспорта.*', ''];
     const foot = ['---', '', '*Экспортировано DamZaGram · плагин «Экспорт чата»*', ''];
@@ -603,13 +603,13 @@ export class HtmlWriter extends Writer {
       const reactions = (Array.isArray(m.reactions) ? m.reactions : []).filter((r) => r && r.count);
       if (reactions.length) {
         html += '<div class="reacts">' + reactions.map((r) => '<span' + (r.chosen ? ' class="me"' : '') + '>'
-          + escapeHtml(r.paid ? '⭐' : (r.customEmojiId || /^\d+$/.test(String(r.emoji)) ? '✨' : r.emoji)) + ' ' + r.count + '</span>').join('') + '</div>';
+          + escapeHtml(r.paid ? 'Stars' : (r.customEmojiId || /^\d+$/.test(String(r.emoji)) ? 'реакция' : r.emoji)) + ' ' + r.count + '</span>').join('') + '</div>';
       }
       const meta = [];
-      if (m.pinned) meta.push('<span title="Закреплено">📌</span>');
+      if (m.pinned) meta.push('<span>закреплено</span>');
       if (m.deleted) meta.push('<span>удалено</span>');
       if (m.editDate) meta.push('<span title="' + escapeHtml(formatDateTime(m.editDate)) + '">изменено</span>');
-      if (m.views) meta.push('<span>👁 ' + formatNumber(m.views) + '</span>');
+      if (m.views) meta.push('<span>' + formatNumber(m.views) + ' просм.</span>');
       const link = ctx.link(m.id);
       const stamp = '<span title="' + escapeHtml(formatDateTime(m.date)) + '">' + formatTime(m.date) + '</span>';
       meta.push(link ? '<a href="' + escapeHtml(link) + '" target="_blank" rel="noopener noreferrer">' + stamp + '</a>' : stamp);
@@ -642,7 +642,7 @@ export class HtmlWriter extends Writer {
     if (info && info.membersCount) sub.push(formatNumber(info.membersCount) + ' ' + plural(info.membersCount, 'участник', 'участника', 'участников'));
     const chips = ['<span>' + formatNumber(meta.count || 0) + ' ' + messagesWord(meta.count || 0) + '</span>'];
     if (meta.first) chips.push('<span>' + formatDate(meta.first) + ' — ' + formatDate(meta.last) + '</span>');
-    if (meta.truncated) chips.push('<span class="warn">⚠️ ' + escapeHtml(meta.truncated) + '</span>');
+    if (meta.truncated) chips.push('<span class="warn">' + escapeHtml(meta.truncated) + '</span>');
     const exported = formatDateTime((meta.exportedAt || Date.now()) / 1000);
     return '<!doctype html>\n<html lang="ru"' + theme + '>\n<head>\n<meta charset="utf-8">\n'
       + '<meta name="viewport" content="width=device-width, initial-scale=1">\n'

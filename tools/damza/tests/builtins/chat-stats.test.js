@@ -43,7 +43,7 @@ const secs = sections(stats, { topAuthors: 5, topWords: 5 });
 const titles = secs.map((s) => s.title);
 assert(titles.includes('Кто пишет больше всех') && titles.includes('Активность по часам') && titles.includes('Эмодзи'), titles.join());
 eq(secs.find((s) => s.title === 'Активность по часам').lines.length, 24);
-assert(reportText(chat, stats, {}).startsWith('📊 Статистика «DamZaGram Chat»'));
+assert(reportText(chat, stats, {}).startsWith('Статистика «DamZaGram Chat»'));
 
 // /stats loads history page by page and renders the panel.
 mock.history[chat.id] = history;

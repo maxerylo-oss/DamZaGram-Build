@@ -135,6 +135,32 @@ struct Version {
 	return path.left(path.indexOf('/'));
 }
 
+// Built-ins that a newer client no longer ships: remove their folders,
+// unless the user turned the folder into their own plugin or a link.
+void RemoveRetiredBuiltins(
+		const QString &root,
+		const std::map<QString, std::vector<const Builtin::File*>> &shipped) {
+	const auto dirs = QDir(root).entryList(
+		QDir::Dirs | QDir::NoDotAndDotDot);
+	for (const auto &name : dirs) {
+		if (shipped.contains(name)) {
+			continue;
+		}
+		const auto path = root + name;
+		const auto info = QFileInfo(path);
+		if (info.isSymLink() || info.isJunction()) {
+			continue;
+		}
+		const auto manifest = ReadObject(path + u"/manifest.json"_q);
+		if (!manifest.value(u"builtin"_q).toBool()
+			|| manifest.value(u"id"_q).toString(name) != name) {
+			continue;
+		}
+		LOG(("Plugins: removing retired built-in %1.").arg(name));
+		QDir(path).removeRecursively();
+	}
+}
+
 void InstallBuiltins() {
 	auto &manager = Manager::Get();
 	const auto root = manager.pluginsPath();
@@ -204,6 +230,7 @@ void InstallBuiltins() {
 		}
 		states.push_back(std::move(state));
 	}
+	RemoveRetiredBuiltins(root, byId);
 }
 
 [[nodiscard]] QVariantList BuiltinList() {

@@ -9,7 +9,11 @@
 #include "damza/plugins/plugin_manager.h"
 #include "damza/ui/plugin_devtools.h"
 #include "damza/ui/settings_plugins.h"
+#include "data/data_document.h"
+#include "data/data_file_click_handler.h"
+#include "data/data_file_origin.h"
 #include "data/data_user.h"
+#include "history/history_item.h"
 #include "main/main_session.h"
 #include "settings/settings_common.h"
 #include "styles/style_boxes.h"
@@ -1057,6 +1061,37 @@ bool OpenPluginFile(
 	ShowInstallBox(
 		controller->uiShow(),
 		ReadPackageFromBytes(file.readAll(), fileName));
+	return true;
+}
+
+bool OpenPluginDocument(
+		Window::SessionController *controller,
+		not_null<DocumentData*> document,
+		HistoryItem *item) {
+	const auto name = document->filename();
+	if (!controller || !Manager::Exists() || !IsPluginFileName(name)) {
+		return false;
+	}
+	const auto path = document->filepath(true);
+	if (!path.isEmpty()) {
+		return OpenPluginFile(controller, name, path);
+	}
+	// Not downloaded yet: download, then open the install box by itself.
+	const auto origin = item
+		? Data::FileOrigin(item->fullId())
+		: Data::FileOrigin();
+	DocumentSaveClickHandler::Save(origin, document);
+	const auto lifetime = controller->lifetime().make_state<rpl::lifetime>();
+	document->session().downloaderTaskFinished(
+	) | rpl::filter([=] {
+		return !document->filepath(true).isEmpty();
+	}) | rpl::take(1) | rpl::on_next([=] {
+		[[maybe_unused]] const auto opened = OpenPluginFile(
+			controller,
+			name,
+			document->filepath(true));
+		crl::on_main(controller, [=] { lifetime->destroy(); });
+	}, *lifetime);
 	return true;
 }
 

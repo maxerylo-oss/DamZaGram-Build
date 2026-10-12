@@ -309,7 +309,7 @@ void ResolveDocument(
 		}
 	} else {
 		document->saveFromDataSilent();
-		if (Damza::PluginsUi::OpenPluginFile(controller, document->filename(), document->filepath(true))) { // DamZaGram
+		if (Damza::PluginsUi::OpenPluginDocument(controller, document, item)) { // DamZaGram
 			return;
 		}
 		if (openPluginInfo()) {

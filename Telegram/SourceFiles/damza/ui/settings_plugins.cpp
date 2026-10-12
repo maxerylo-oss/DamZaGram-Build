@@ -456,7 +456,7 @@ void DamzaPlugins::addCard(
 		const auto error = card->add(
 			object_ptr<Ui::FlatLabel>(
 				card,
-				u"⚠ "_q + state.error,
+				state.error,
 				*MakeLabelStyle(
 					card->lifetime(),
 					st::boxDividerLabel,

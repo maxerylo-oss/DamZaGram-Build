@@ -2,6 +2,9 @@
 // a fork of AyuGram for Desktop.
 #pragma once
 
+class DocumentData;
+class HistoryItem;
+
 namespace style {
 struct FlatLabel;
 struct RoundButton;
@@ -62,6 +65,13 @@ void ShowCreateBox(std::shared_ptr<Ui::Show> show, const QString &author);
 	Window::SessionController *controller,
 	const QString &fileName,
 	const QString &path);
+
+// Same for a plugin document clicked in a chat: downloads it first if
+// needed and shows the install box once the file is there.
+[[nodiscard]] bool OpenPluginDocument(
+	Window::SessionController *controller,
+	not_null<DocumentData*> document,
+	HistoryItem *item);
 
 void ShowPluginsSection(not_null<Window::SessionController*> controller);
 void AddMainMenuEntry(

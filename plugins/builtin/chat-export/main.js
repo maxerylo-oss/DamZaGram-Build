@@ -1,5 +1,5 @@
 // Экспорт чата: история чата в HTML, Markdown или JSON.
-// Пункт меню чата «📤 Экспорт чата…» и /export [html|md|json] [N|все] [с [по]].
+// Пункт меню чата «Экспорт чата…» и /export [html|md|json] [N|все] [с [по]].
 // История грузится страницами через dzg.messages.iterate; между страницами
 // плагин отдаёт управление клиенту (await + таймер), поэтому интерфейс не
 // подвисает, а сторожевой таймер в 3 секунды не срабатывает. FLOOD_WAIT и
@@ -46,7 +46,7 @@ const setting = (key, fallback) => {
 
 const clock = () => ((globalThis.performance && typeof performance.now === 'function') ? performance.now() : Date.now());
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.floor(ms) || 0)));
-const toast = (text) => dzg.ui.toast(text, '📤 Экспорт чата');
+const toast = (text) => dzg.ui.toast(text, 'Экспорт чата');
 
 // --- Разбор ввода ---------------------------------------------------------
 
@@ -340,7 +340,7 @@ export function progressInfo(j, now) {
   if (fraction > 0.02 && j.scanned >= PAGE) parts.push('осталось ≈ ' + formatSpan(elapsed * (1 - fraction) / fraction));
   return {
     fraction,
-    bar: fraction >= 0 ? progressBar(fraction) + '  ' + Math.floor(fraction * 100) + '%' : '⏳ ' + formatNumber(j.scanned) + ' просмотрено',
+    bar: fraction >= 0 ? progressBar(fraction) + '  ' + Math.floor(fraction * 100) + '%' : '' + formatNumber(j.scanned) + ' просмотрено',
     status: parts.join(' · '),
     where: j.lastDate ? 'Дошли до ' + formatDateTime(j.lastDate) : 'Загружаю историю…',
   };
@@ -362,7 +362,7 @@ function updateProgress(j, force) {
 }
 
 function renderProgress(j) {
-  const p = openPanel('📤 Экспорт чата');
+  const p = openPanel('Экспорт чата');
   p.addLabel('«' + j.chat.name + '»', { bold: true });
   p.addLabel(describe(j.opts), { muted: true });
   p.addSkip(4);
@@ -469,7 +469,7 @@ async function pace(j) {
 async function waitRetry(j, plan) {
   const steps = Math.max(1, Math.ceil(plan.ms / 1000));
   for (let left = steps; left > 0; --left) {
-    j.waitText = (plan.flood ? '⏳ Telegram просит подождать: ещё ' : '⚠️ Сбой связи, повтор через ') + formatSpan(left);
+    j.waitText = (plan.flood ? 'Telegram просит подождать: ещё ' : 'Сбой связи, повтор через ') + formatSpan(left);
     updateProgress(j, true);
     await sleep(1000);
     if (j.cancelled || j.stopEarly || unloaded) break;
@@ -575,20 +575,20 @@ function sendToSaved(j, files) {
   }
   const ok = dzg.messages.sendFile(me, files.map((f) => f.path), {
     asDocument: true,
-    caption: '📤 Экспорт «' + j.chat.name + '»: ' + formatNumber(j.exported) + ' ' + messagesWord(j.exported),
+    caption: 'Экспорт «' + j.chat.name + '»: ' + formatNumber(j.exported) + ' ' + messagesWord(j.exported),
   });
   toast(ok ? 'Отправляю в Избранное…' : 'Не удалось отправить файл');
 }
 
 function renderDone(j, result) {
   const { files, failed, meta } = result;
-  const p = openPanel('📤 Экспорт чата');
-  p.addLabel('✅ Готово: «' + j.chat.name + '»', { bold: true });
+  const p = openPanel('Экспорт чата');
+  p.addLabel('Готово: «' + j.chat.name + '»', { bold: true });
   const seconds = (clock() - j.started) / 1000;
   p.addLabel(formatNumber(j.exported) + ' ' + messagesWord(j.exported)
     + (j.oldest ? ' · ' + formatDate(j.oldest) + ' — ' + formatDate(j.newest) : '')
     + ' · за ' + formatSpan(seconds));
-  if (meta.truncated) p.addLabel('⚠️ ' + meta.truncated, { muted: true });
+  if (meta.truncated) p.addLabel('' + meta.truncated, { muted: true });
   if (failed.length) p.addLabel('Не удалось записать: ' + failed.join(', '), { muted: true });
   for (const f of files) p.addLabel(FORMAT_TITLES[f.format] + ': ' + f.name, { muted: true });
   p.addSeparator();
@@ -615,7 +615,7 @@ function renderEnd(j, title, text, onSave) {
     toast(title + (text ? '\n' + text : ''));
     return;
   }
-  const p = openPanel('📤 Экспорт чата');
+  const p = openPanel('Экспорт чата');
   const status = p.addLabel(title, { bold: true });
   j.panel = p;
   j.view = view;
@@ -630,7 +630,7 @@ function renderEnd(j, title, text, onSave) {
 async function saveResult(j) {
   const result = await writeFiles(j);
   if (!result.files.length) {
-    if (uiAlive(j)) renderEnd(j, '⚠️ Не удалось записать файлы', exportDir(), null);
+    if (uiAlive(j)) renderEnd(j, 'Не удалось записать файлы', exportDir(), null);
     else toast('Не удалось записать файлы в ' + exportDir());
     return result;
   }
@@ -645,7 +645,7 @@ async function saveResult(j) {
   const text = '«' + j.chat.name + '»: ' + formatNumber(j.exported) + ' ' + messagesWord(j.exported)
     + ' → ' + result.files.map((f) => f.name).join(', ') + '\nНажми «Открыть», чтобы открыть папку.';
   if (typeof dzg.ui.notify === 'function') {
-    dzg.ui.notify({ title: '📤 Экспорт готов', text, onClick: openFolder });
+    dzg.ui.notify({ title: 'Экспорт готов', text, onClick: openFolder });
   } else {
     toast(text);
   }
@@ -718,7 +718,7 @@ export async function startExport(chat, opts) {
     }
     if (j.error) {
       const exported = j.exported;
-      renderEnd(j, '⚠️ Экспорт прерван', j.error + (exported ? '\nУже выгружено: ' + formatNumber(exported) + ' ' + messagesWord(exported) + '.' : ''),
+      renderEnd(j, 'Экспорт прерван', j.error + (exported ? '\nУже выгружено: ' + formatNumber(exported) + ' ' + messagesWord(exported) + '.' : ''),
         exported ? () => {
           if (job) {
             toast('Сначала дождись окончания экспорта «' + job.chat.name + '»');
@@ -766,7 +766,7 @@ export async function openOptions(chat, prefill, attempt) {
   let result;
   try {
     result = await dzg.ui.box({
-      title: '📤 Экспорт чата',
+      title: 'Экспорт чата',
       text: '«' + target.name + '»\n\nСколько сообщений: 100, 1000, 10000 или «все» — считая от самых новых.'
         + ' Даты — ГГГГ-ММ-ДД, их можно не заполнять. Можно выбрать несколько форматов сразу.',
       inputs: [
@@ -810,7 +810,7 @@ export async function openOptions(chat, prefill, attempt) {
 // --- Последние экспорты ---------------------------------------------------
 
 export function showHistory() {
-  const p = openPanel('📤 Экспорты чатов');
+  const p = openPanel('Экспорты чатов');
   if (job) {
     const running = job;
     p.addLabel('Идёт экспорт «' + running.chat.name + '»', { bold: true });
@@ -819,7 +819,7 @@ export function showHistory() {
   }
   const list = history();
   if (!list.length) {
-    p.addLabel('Пока ничего не экспортировано. Меню чата → «📤 Экспорт чата…» или /export в любом чате.', { muted: true });
+    p.addLabel('Пока ничего не экспортировано. Меню чата → «Экспорт чата…» или /export в любом чате.', { muted: true });
   }
   for (const entry of list) {
     const count = Number(entry.count) || 0;
@@ -862,7 +862,7 @@ async function exportCommand({ args, chat }) {
       openFolder();
       return;
     case 'help':
-      dzg.ui.alert(USAGE, '📤 Экспорт чата');
+      dzg.ui.alert(USAGE, 'Экспорт чата');
       return;
     default:
       break;
@@ -895,7 +895,7 @@ dzg.commands.register('export', {
 });
 
 dzg.ui.addChatMenuItem({
-  title: '📤 Экспорт чата…',
+  title: 'Экспорт чата…',
   onClick: (chat) => openOptions(chat),
 });
 

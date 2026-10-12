@@ -1,5 +1,5 @@
 // Статистика чата по последним N сообщениям (dzg.messages.history).
-// Пункт меню «📊 Статистика чата» и /stats [N].
+// Пункт меню «Статистика чата» и /stats [N].
 // Автор: @wetakush
 
 const MAX_COUNT = 5000;
@@ -188,7 +188,7 @@ export function sections(stats, options) {
 }
 
 export function reportText(chat, stats, options) {
-  const parts = ['📊 Статистика «' + chat.name + '»'];
+  const parts = ['Статистика «' + chat.name + '»'];
   for (const section of sections(stats, options)) {
     parts.push('', section.title + ':');
     parts.push(...section.lines);
@@ -250,7 +250,7 @@ export async function showStats(chat, count) {
     stopWords: setting('stopWords', ''),
   };
   loading = true;
-  const p = openPanel('📊 ' + chat.name);
+  const p = openPanel('' + chat.name);
   const status = p.addLabel('Загружаю сообщения… 0 из ' + wanted, { muted: true });
   try {
     const messages = await load(chat, wanted, (n) => status.setText('Загружаю сообщения… ' + n + ' из ' + wanted));
@@ -294,7 +294,7 @@ dzg.commands.register('stats', {
 });
 
 dzg.ui.addChatMenuItem({
-  title: '📊 Статистика чата',
+  title: 'Статистика чата',
   onClick: (chat) => showStats(chat),
 });
 

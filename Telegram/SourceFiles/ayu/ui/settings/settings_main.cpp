@@ -134,12 +134,6 @@ void BuildCategories(SectionBuilder &builder) {
 		.targetSection = AyuOther::Id(),
 		.icon = { &st::menuIconFave },
 	});
-	builder.addSectionButton({
-		.title = rpl::single(Damza::Text("Plugins", "Плагины")),
-		.targetSection = DamzaPlugins::Id(),
-		.icon = { &st::menuIconBotCommands },
-		.keywords = { u"plugins"_q, u"плагины"_q, u"js"_q },
-	});
 }
 
 void BuildLinks(SectionBuilder &builder) {
@@ -182,27 +176,6 @@ void BuildLinks(SectionBuilder &builder) {
 			});
 		},
 	});
-	builder.addButton({
-		.id = u"ayu/crowdin"_q,
-		.title = tr::ayu_LinksTranslate(),
-		.icon = { &st::menuIconTranslate },
-		.label = rpl::single(QString("Crowdin")),
-		.onClick = [=] {
-			QDesktopServices::openUrl(
-				QString("https://translate.ayugram.one"));
-		},
-	});
-	builder.addButton({
-		.id = u"ayu/website"_q,
-		.title = tr::ayu_LinksDocumentation(),
-		.icon = { &st::menuIconIpAddress },
-		.label = rpl::single(QString("docs.ayugram.one")),
-		.onClick = [=] {
-			QDesktopServices::openUrl(
-				QString("https://docs.ayugram.one"));
-		},
-	});
-
 	builder.addSkip();
 }
 

@@ -91,10 +91,10 @@ void WriteStamp() {
 			&st::menuIconFave,
 			Text("Built-in plugins", "Встроенные плагины"),
 			Text(
-				"Useful plugins ship with the client. "
-				"Turn them on in one click.",
-				"Полезные плагины уже в комплекте. "
-				"Включаются в один клик."),
+				"Chat export, chat statistics and the DamZaGram "
+				"theme ship with the client.",
+				"Экспорт чата, статистика чата и тема DamZaGram "
+				"уже в комплекте."),
 		},
 		{
 			&st::menuIconExperimental,
@@ -121,8 +121,8 @@ void WriteStamp() {
 	auto result = TextWithEntities();
 	result.append(Text("Plugins live in ", "Плагины — в разделе "));
 	result.append(tr::bold(Text(
-		"Settings › DamZaGram Preferences › Plugins",
-		"Настройки › Настройки DamZaGram › Плагины")));
+		"Settings › Plugins",
+		"Настройки › Плагины")));
 	result.append(u".\n\n"_q);
 	result.append(Brand::Name());
 	result.append(Text(" by ", " от "));

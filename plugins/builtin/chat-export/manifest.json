@@ -1,10 +1,10 @@
 {
   "id": "chat-export",
   "name": "Экспорт чата",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "@wetakush",
   "builtin": true,
-  "description": "📤 История чата в файл: красивая HTML-страница, Markdown-расшифровка или JSON. Пункт меню чата «Экспорт чата…» и /export html 1000. Прогресс со скоростью и ETA, отмена, период по датам.",
+  "description": "История чата в файл: красивая HTML-страница, Markdown-расшифровка или JSON. Пункт меню чата «Экспорт чата…» и /export html 1000. Прогресс со скоростью и ETA, отмена, период по датам.",
   "settings": [
     {
       "key": "format",
@@ -12,9 +12,18 @@
       "title": "Формат по умолчанию",
       "default": "html",
       "options": [
-        { "value": "html", "title": "HTML" },
-        { "value": "md", "title": "Markdown" },
-        { "value": "json", "title": "JSON" }
+        {
+          "value": "html",
+          "title": "HTML"
+        },
+        {
+          "value": "md",
+          "title": "Markdown"
+        },
+        {
+          "value": "json",
+          "title": "JSON"
+        }
       ]
     },
     {
@@ -23,10 +32,22 @@
       "title": "Сколько сообщений по умолчанию",
       "default": "1000",
       "options": [
-        { "value": "100", "title": "100" },
-        { "value": "1000", "title": "1 000" },
-        { "value": "10000", "title": "10 000" },
-        { "value": "all", "title": "Все" }
+        {
+          "value": "100",
+          "title": "100"
+        },
+        {
+          "value": "1000",
+          "title": "1 000"
+        },
+        {
+          "value": "10000",
+          "title": "10 000"
+        },
+        {
+          "value": "all",
+          "title": "Все"
+        }
       ]
     },
     {
@@ -49,9 +70,18 @@
       "title": "Тема HTML-страницы",
       "default": "auto",
       "options": [
-        { "value": "auto", "title": "Как в системе" },
-        { "value": "light", "title": "Светлая" },
-        { "value": "dark", "title": "Тёмная" }
+        {
+          "value": "auto",
+          "title": "Как в системе"
+        },
+        {
+          "value": "light",
+          "title": "Светлая"
+        },
+        {
+          "value": "dark",
+          "title": "Тёмная"
+        }
       ]
     },
     {

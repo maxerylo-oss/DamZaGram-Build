@@ -280,7 +280,7 @@ export function show() {
     return;
   }
   if (!panel || !panel.isOpen()) {
-    panel = dzg.ui.panel({ title: '🎨 Тема DamZaGram', width: 360 });
+    panel = dzg.ui.panel({ title: 'Тема DamZaGram', width: 360 });
     panel.on('close', () => { panel = null; });
   }
   render();
@@ -294,7 +294,7 @@ dzg.commands.register('theme', {
       return;
     }
     if (setPreset(args[0])) {
-      dzg.ui.toast('Пресет: ' + presetName(), '🎨 Тема DamZaGram');
+      dzg.ui.toast('Пресет: ' + presetName(), 'Тема DamZaGram');
     } else {
       dzg.ui.toast('Нет такого пресета. Есть: ' + PRESET_NAMES.join(', '));
     }

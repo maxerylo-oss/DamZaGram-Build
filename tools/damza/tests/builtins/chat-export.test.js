@@ -83,9 +83,9 @@ eq(toCommonMark('\\_\\_'), '\\_\\_', 'escapes kept');
 
 eq(safeLinks('<a href="javascript:alert(1)">x</a><a href="https://ok.dev">y</a>'),
   '<a>x</a><a href="https://ok.dev" target="_blank" rel="noopener noreferrer">y</a>');
-eq(mediaLabel({ media: 'photo', mediaInfo: { width: 1280, height: 720, size: 250000 } }), '📷 Фото · 1280×720 · 244 КБ');
-eq(mediaLabel({ media: 'voice', mediaInfo: { duration: 42 } }), '🎤 Голосовое сообщение · 0:42');
-eq(mediaLabel({ media: 'file', mediaInfo: { fileName: 'отчёт.pdf', size: 3 * 1024 * 1024 } }), '📎 Файл · отчёт.pdf · 3,0 МБ');
+eq(mediaLabel({ media: 'photo', mediaInfo: { width: 1280, height: 720, size: 250000 } }), '[Фото · 1280×720 · 244 КБ]');
+eq(mediaLabel({ media: 'voice', mediaInfo: { duration: 42 } }), '[Голосовое сообщение · 0:42]');
+eq(mediaLabel({ media: 'file', mediaInfo: { fileName: 'отчёт.pdf', size: 3 * 1024 * 1024 } }), '[Файл · отчёт.pdf · 3,0 МБ]');
 eq(mediaLabel({}), '');
 eq(safeFileName('DamZaGram Chat'), 'DamZaGram_Chat');
 eq(safeFileName('Чат: «Ромашка» 🌼'), 'Чат_Ромашка');
@@ -206,7 +206,7 @@ assert(!html.includes('javascript:'), 'no unsafe links');
 assert(!html.includes('Вася создал группу'), 'service messages skipped by default');
 assert(html.includes('<a class="reply" href="#m2"><b>Петя</b>Жирный текст'), 'reply resolved to the quote');
 assert(html.includes('↩ Ответ на сообщение вне экспорта'), 'reply outside the export links to t.me');
-assert(html.includes('📷 Фото · 1280×720 · 244 КБ') && html.includes('🎤 Голосовое сообщение · 0:42'), 'media placeholders');
+assert(html.includes('[Фото · 1280×720 · 244 КБ]') && html.includes('[Голосовое сообщение · 0:42]'), 'media placeholders');
 assert(html.includes('↪ Переслано от <b>Новости</b>'), 'forward');
 assert(html.includes('<span class="me">👍 3</span>'), 'reactions');
 assert(html.includes('class="msg out first" id="m5"'), 'outgoing bubble');
@@ -221,7 +221,7 @@ assert(note.title.includes('Экспорт готов') && note.text.includes('2
 note.onClick();
 eq(mock.links[mock.links.length - 1], 'file:///tmp/sandbox-data/chat-export/exports/');
 let panel = mock.lastPanel();
-assert(mock.panelText(panel).includes('✅ Готово'), mock.panelText(panel));
+assert(mock.panelText(panel).includes('Готово'), mock.panelText(panel));
 mock.click(panel, 'Открыть HTML');
 eq(mock.links[mock.links.length - 1], fileUrl(fileName('', 'html')));
 mock.click(panel, 'Отправить в Избранное');
@@ -265,7 +265,7 @@ assert(md.includes('*— Вася создал группу · 09:00 —*'), 'se
 assert(md.includes('**Петя** · [09:20](https://t.me/c/200/2)'), 'author, time and link');
 assert(md.includes('> ↩ **Петя:** Жирный текст'), 'reply quote');
 assert(md.includes('**Жирный** *текст*'), 'formatting in CommonMark');
-assert(md.includes('*📷 Фото · 1280×720 · 244 КБ*'), 'media placeholder');
+assert(md.includes('*\\[Фото · 1280×720 · 244 КБ\\]*'), 'media placeholder');
 assert(md.includes('↪ Переслано от **Новости**'), 'forward');
 assert(md.includes('👍 3'), 'reactions');
 assert(md.includes('Экспортировано DamZaGram'), 'author line');
