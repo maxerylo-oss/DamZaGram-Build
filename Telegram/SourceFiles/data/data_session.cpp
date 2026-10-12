@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_session.h"
 
+#include "damza/plugins/plugins.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "main/main_app_config.h"
@@ -3406,6 +3407,7 @@ void Session::processMessagesDeleted(
 		if (list && i != list->end()) {
 			const auto item = i->second;
 			const auto history = item->history();
+			Damza::Plugins::MessageDeleted(item);
 			if (isMessageSavable(item)) {
 				processMessageDelete(item);
 			} else {
@@ -3435,6 +3437,7 @@ void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {
 	for (const auto &messageId : data) {
 		if (const auto item = nonChannelMessage(messageId.v)) {
 			const auto history = item->history();
+			Damza::Plugins::MessageDeleted(item);
 			if (isMessageSavable(item)) {
 				processMessageDelete(item);
 			} else {

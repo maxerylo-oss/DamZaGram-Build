@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_peer_menu.h"
 
+#include "damza/plugins/plugins.h"
 #include "base/call_delayed.h"
 #include "menu/menu_check_item.h"
 #include "menu/menu_mark_as_read.h"
@@ -1920,6 +1921,7 @@ void Filler::fillContextMenuActions() {
 		}
 	}
 	addBanFromChannel();
+	Damza::Plugins::FillPeerMenu(_peer, _addAction);
 	addClearHistory();
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);
 	addDeleteChat();
@@ -1947,6 +1949,7 @@ void Filler::fillHistoryActions() {
 	addDirectMessages();
 	addExportChat();
 	addTranslate();
+	Damza::Plugins::FillPeerMenu(_peer, _addAction);
 	addReport();
 	addClearHistory();
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);

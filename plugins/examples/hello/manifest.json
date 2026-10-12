@@ -1,0 +1,12 @@
+{
+  "id": "hello",
+  "name": "Hello DamZaGram",
+  "version": "1.0.0",
+  "author": "DamZaGram",
+  "description": "Минимальный пример: события, команда /hello, пункт меню у сообщения.",
+  "main": "main.js",
+  "settings": [
+    { "key": "greeting", "type": "string", "title": "Текст приветствия", "default": "Привет из плагина!" },
+    { "key": "toastOnOpen", "type": "bool", "title": "Тост при открытии чата", "default": false }
+  ]
+}

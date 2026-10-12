@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_context_menu.h"
 
+#include "damza/plugins/plugins.h"
 #include "api/api_attached_stickers.h"
 #include "api/api_editing.h"
 #include "api/api_global_privacy.h"
@@ -1441,6 +1442,7 @@ void AddMessageActions(
 	if (request.item) {
 		AyuUi::AddReadUntilAction(menu, request.item);
 		AyuUi::AddBurnAction(menu, request.item);
+		Damza::Plugins::FillMessageMenu(menu, request.item);
 	}
 }
 

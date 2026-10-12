@@ -1,0 +1,8 @@
+{
+  "id": "ui-playground",
+  "name": "UI Playground",
+  "version": "1.0.0",
+  "author": "DamZaGram",
+  "description": "Демонстрация доступа к интерфейсу: дерево виджетов, свои кнопки и панели, цвета темы, HTTP.",
+  "settings": []
+}

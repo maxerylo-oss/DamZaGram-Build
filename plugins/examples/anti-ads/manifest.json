@@ -1,0 +1,11 @@
+{
+  "id": "anti-ads",
+  "name": "Антиреклама",
+  "version": "1.0.0",
+  "author": "DamZaGram",
+  "description": "Скрывает рекламные посты в каналах (erid, #реклама и свои слова).",
+  "settings": [
+    { "key": "words", "type": "text", "title": "Доп. слова или /регулярки/, по одному в строке", "default": "" },
+    { "key": "onlyChannels", "type": "bool", "title": "Только в каналах", "default": true }
+  ]
+}

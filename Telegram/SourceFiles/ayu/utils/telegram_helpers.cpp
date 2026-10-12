@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #include "ayu/utils/telegram_helpers.h"
 
+#include "damza/plugins/plugins.h"
 #include "apiwrap.h"
 #include "lang_auto.h"
 #include "api/api_common.h"
@@ -299,7 +300,8 @@ bool isMessageHidden(const not_null<HistoryItem*> item) {
 		return true;
 	}
 
-	return FiltersController::filtered(item);
+	return FiltersController::filtered(item)
+		|| Damza::Plugins::Filtered(item);
 }
 
 void MarkAsReadChatList(not_null<Dialogs::MainList*> list) {

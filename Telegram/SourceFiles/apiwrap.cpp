@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "apiwrap.h"
 
+#include "damza/plugins/plugins.h"
 #include "api/api_authorizations.h"
 #include "api/api_attached_stickers.h"
 #include "api/api_blocked_peers.h"
@@ -4759,6 +4760,9 @@ void ApiWrap::sendRichMessage(
 void ApiWrap::sendMessage(
 		MessageToSend &&message,
 		std::optional<MsgId> localMessageId) {
+	if (!Damza::Plugins::BeforeSend(message)) {
+		return;
+	}
 	applyGhostScheduling(message.action, message.textWithTags.text);
 	const auto clearReplyTo = prependPseudoReply(message);
 

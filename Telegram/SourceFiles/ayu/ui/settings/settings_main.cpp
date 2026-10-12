@@ -6,6 +6,8 @@
 // Copyright @Radolyn, 2026
 #include "ayu/ui/settings/settings_main.h"
 
+#include "damza/damza_lang.h"
+#include "damza/ui/settings_plugins.h"
 #include "settings/sections/settings_main.h"
 #include "lang_auto.h"
 #include "ayu/ayu_settings.h"
@@ -129,6 +131,12 @@ void BuildCategories(SectionBuilder &builder) {
 		.title = tr::ayu_CategoryOther(),
 		.targetSection = AyuOther::Id(),
 		.icon = { &st::menuIconFave },
+	});
+	builder.addSectionButton({
+		.title = rpl::single(Damza::Text("Plugins", "Плагины")),
+		.targetSection = DamzaPlugins::Id(),
+		.icon = { &st::menuIconBotCommands },
+		.keywords = { u"plugins"_q, u"плагины"_q, u"js"_q },
 	});
 }
 

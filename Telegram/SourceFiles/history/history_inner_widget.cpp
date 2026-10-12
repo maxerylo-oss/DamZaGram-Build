@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history_inner_widget.h"
 
+#include "damza/plugins/plugins.h"
 #include "api/api_polls.h"
 #include "chat_helpers/stickers_emoji_pack.h"
 #include "core/application.h"
@@ -3372,6 +3373,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 
 		AyuUi::AddReadUntilAction(_menu, item);
 		AyuUi::AddBurnAction(_menu, item);
+		Damza::Plugins::FillMessageMenu(_menu, item);
 	};
 
 	const auto addReplyAction = [&](HistoryItem *item) {

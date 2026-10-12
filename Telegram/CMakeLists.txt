@@ -107,6 +107,16 @@ PRIVATE
     ayugram::lib_icu
 )
 
+# DamZaGram: plugin engine and every file under SourceFiles/damza.
+include(cmake/lib_quickjs.cmake)
+target_link_libraries(Telegram PRIVATE damza_quickjs)
+
+file(GLOB_RECURSE damza_files CONFIGURE_DEPENDS
+    RELATIVE ${src_loc}
+    ${src_loc}/damza/*.cpp
+    ${src_loc}/damza/*.h
+)
+
 set(ayugram_files
         ayu/ayu_worker.cpp
         ayu/ayu_worker.h
@@ -266,6 +276,7 @@ nice_target_sources(Telegram ${src_loc}
 PRIVATE
     ${style_files}
     ${ayugram_files}
+    ${damza_files}
 
     api/api_attached_stickers.cpp
     api/api_attached_stickers.h

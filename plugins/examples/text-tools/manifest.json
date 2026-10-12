@@ -1,0 +1,10 @@
+{
+  "id": "text-tools",
+  "name": "Text Tools",
+  "version": "1.0.0",
+  "author": "DamZaGram",
+  "description": "Команды /calc /shrug /upper и автозамена :shrug: прямо перед отправкой.",
+  "settings": [
+    { "key": "replace", "type": "bool", "title": "Автозамена :shrug: и :lenny:", "default": true }
+  ]
+}
