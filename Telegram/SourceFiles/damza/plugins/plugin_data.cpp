@@ -364,6 +364,8 @@ QVariantMap SerializeMessage(not_null<HistoryItem*> item) {
 		{ u"out"_q, item->out() },
 		{ u"service"_q, item->isService() },
 		{ u"post"_q, item->isPost() },
+		// Which account got it: compare with dzg.users.self().id.
+		{ u"selfId"_q, PeerIdToString(item->history()->session().userPeerId()) },
 		{ u"pinned"_q, item->isPinned() },
 		{ u"deleted"_q, item->isDeleted() },
 		{ u"replyToId"_q, double(item->replyToId().bare) },

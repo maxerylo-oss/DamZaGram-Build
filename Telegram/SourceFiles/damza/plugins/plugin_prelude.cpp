@@ -151,15 +151,20 @@ QString Prelude() {
 		app: native.appInfo(),
 
 		on(event, fn) {
-			if (!handlers.has(event)) handlers.set(event, []);
-			handlers.get(event).push(fn);
-			return () => dzg.off(event, fn);
+			const name = String(event);
+			if (!handlers.has(name)) handlers.set(name, []);
+			const list = handlers.get(name);
+			list.push(fn);
+			if (list.length === 1) native.setListens(name, true);
+			return () => dzg.off(name, fn);
 		},
 		off(event, fn) {
-			const list = handlers.get(event);
+			const name = String(event);
+			const list = handlers.get(name);
 			if (!list) return;
 			const index = list.indexOf(fn);
 			if (index >= 0) list.splice(index, 1);
+			if (!list.length) native.setListens(name, false);
 		},
 		once(event, fn) {
 			const off = dzg.on(event, (data) => { off(); fn(data); });

@@ -12,10 +12,12 @@
 #include "damza/plugins/plugin_manager.h"
 #include "damza/ui/plugin_boxes.h"
 #include "damza/ui/plugin_devtools.h"
+#include "ui/widgets/fields/input_field.h"
 #include "window/window_session_controller.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtGui/QKeyEvent>
+#include <QtWidgets/QApplication>
 
 namespace Damza::Plugins {
 namespace {
@@ -100,6 +102,15 @@ void Later(Fn<void()> callback) {
 	return result.join(';');
 }
 
+[[nodiscard]] bool InTextField() {
+	for (auto w = QApplication::focusWidget(); w; w = w->parentWidget()) {
+		if (dynamic_cast<Ui::InputField*>(w)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 class ManagerShortcut final : public QObject {
 public:
 	using QObject::QObject;
@@ -118,6 +129,9 @@ protected:
 		const auto isP = (key->key() == Qt::Key_P)
 			|| (key->nativeVirtualKey() == Qt::Key_P);
 		if (!isP || modifiers != (Qt::ControlModifier | Qt::ShiftModifier)) {
+			return false;
+		} else if (InTextField()) {
+			// Ctrl+Shift+P formats a spoiler in message fields.
 			return false;
 		} else if (type == QEvent::ShortcutOverride) {
 			e->accept();
@@ -153,7 +167,7 @@ void CheckChanged() {
 		SignatureKnown = true;
 		LastSignature = now;
 		if (notify) {
-			Manager::Get().emitEvent(
+			Manager::Get().emitEventLater(
 				u"plugins.changed"_q,
 				QVariantMap{ { u"plugins"_q, DescribeAll() } });
 		}

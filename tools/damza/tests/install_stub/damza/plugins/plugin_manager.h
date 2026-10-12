@@ -66,6 +66,7 @@ public:
 		}
 	}
 	void refresh() { rescan(); }
+	void forgetPlugin(const QString &) {}
 	void reload(const QString &) { ++reloads; rescan(); }
 	void setEnabled(const QString &id, bool value) {
 		enabled[id] = value;

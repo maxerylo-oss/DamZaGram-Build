@@ -998,7 +998,7 @@ void AppStarted() {
 			return;
 		}
 		S().appActive = active;
-		Manager::Get().emitEvent(
+		Manager::Get().emitEventLater(
 			u"app.focus"_q,
 			QVariantMap{ { u"active"_q, active } });
 	}, Manager::Get().lifetime());
@@ -1156,7 +1156,7 @@ void RegisterComposeField(
 		if (!Manager::Exists()) {
 			return;
 		}
-		Manager::Get().emitEvent(u"compose.changed"_q, QVariantMap{
+		Manager::Get().emitEventLater(u"compose.changed"_q, QVariantMap{
 			{ u"chat"_q, PeerValue(peer ? peer() : nullptr) },
 			{ u"text"_q, raw->getLastText() },
 		});

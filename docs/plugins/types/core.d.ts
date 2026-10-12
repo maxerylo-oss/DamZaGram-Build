@@ -40,6 +40,8 @@ interface Message {
   replyToId: number;
   views: number;
   media?: MediaType;
+  /** Аккаунт, которому пришло сообщение: id его Peer (сравни с dzg.users.self().id). */
+  selfId: PeerId;
 }
 
 interface PluginInfo {

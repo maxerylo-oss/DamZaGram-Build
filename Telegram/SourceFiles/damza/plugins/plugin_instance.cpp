@@ -141,6 +141,18 @@ QVariant Instance::dispatch(const QString &type, const QVariant &payload) {
 	return result;
 }
 
+void Instance::setListens(const QString &event, bool listens) {
+	if (listens) {
+		_listens.emplace(event);
+	} else {
+		_listens.remove(event);
+	}
+}
+
+bool Instance::listens(const QString &event) const {
+	return _listens.contains(event);
+}
+
 void Instance::setHasFilter(bool value) {
 	_hasFilter = value;
 }
@@ -174,7 +186,11 @@ void Instance::saveStorage() {
 }
 
 void Instance::log(const QString &level, const QString &text) {
-	const auto line = u"[%1] %2"_q.arg(level, text);
+	constexpr auto kMaxLine = 16 * 1024;
+	auto line = u"[%1] %2"_q.arg(level, text);
+	if (line.size() > kMaxLine) {
+		line = line.left(kMaxLine) + u"… (%1 chars cut)"_q.arg(line.size() - kMaxLine);
+	}
 	_log.push_back(line);
 	while (_log.size() > kMaxLogLines) {
 		_log.pop_front();

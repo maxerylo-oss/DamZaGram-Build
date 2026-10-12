@@ -34,6 +34,10 @@ public:
 	// True while JS of this plugin is on the stack.
 	[[nodiscard]] bool busy() const;
 
+	// Events this plugin has dzg.on() handlers for (reported by prelude).
+	void setListens(const QString &event, bool listens);
+	[[nodiscard]] bool listens(const QString &event) const;
+
 	void setHasFilter(bool value);
 	[[nodiscard]] bool hasFilter() const;
 	void setHasSendHook(bool value);
@@ -54,6 +58,7 @@ private:
 	QString _error;
 	QJsonObject _storage;
 	QStringList _log;
+	base::flat_set<QString> _listens;
 	bool _hasFilter = false;
 	bool _hasSendHook = false;
 	bool _unloading = false;

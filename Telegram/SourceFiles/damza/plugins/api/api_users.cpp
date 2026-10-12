@@ -313,7 +313,7 @@ void StartStatusTracking(SessionPtr session) {
 			|| (Manager::Get().activeSession() != session.get())) {
 			return;
 		}
-		Manager::Get().emitEvent(u"user.status"_q, QVariantMap{
+		Manager::Get().emitEventLater(u"user.status"_q, QVariantMap{
 			{ u"user"_q, SerializePeer(user) },
 			{ u"online"_q, status.online },
 			{ u"lastSeen"_q, double(status.lastSeen) },

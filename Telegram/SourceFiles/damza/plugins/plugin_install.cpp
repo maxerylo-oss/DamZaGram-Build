@@ -901,6 +901,7 @@ bool UninstallPlugin(const QString &id, bool removeData, QString *error) {
 		: QDir(dir).removeRecursively();
 	if (removed && removeData && IsValidPluginId(id)) {
 		QFile::remove(PluginDataFile(id));
+		manager.forgetPlugin(id);
 	}
 	manager.refresh();
 	if (!removed) {

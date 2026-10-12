@@ -75,6 +75,8 @@ public:
 	// Marks a plugin enabled unless the user already chose a state for it.
 	// Call before plugins are scanned (from ApiModule::appStarted).
 	void enableByDefault(const QString &id);
+	// Drops the enabled flag and settings of an uninstalled plugin.
+	void forgetPlugin(const QString &id);
 	void reload(const QString &id);
 	void reloadAll();
 	void setDevMode(bool enabled);
@@ -98,6 +100,9 @@ public:
 
 	// Called by instances.
 	void emitEvent(const QString &event, const QVariant &payload);
+	// True if some loaded plugin has a dzg.on() handler for the event:
+	// check it before serializing an expensive payload.
+	[[nodiscard]] bool anyListens(const QString &event) const;
 	// From client code that must not run plugin JS right now (loops over
 	// raw item pointers): queued, delivered in order on the next loop.
 	void emitEventLater(const QString &event, const QVariant &payload);
@@ -107,6 +112,9 @@ public:
 	[[nodiscard]] Main::Session *activeSession() const;
 	[[nodiscard]] Window::SessionController *activeController() const;
 	[[nodiscard]] Window::Controller *activeWindow() const;
+
+	// A plugin wrote this file itself: don't hot reload it for that.
+	void ignoreFileChange(const QString &path);
 
 	// Destroyed with the manager on quit: use it for module subscriptions.
 	[[nodiscard]] rpl::lifetime &lifetime();
@@ -150,6 +158,7 @@ private:
 	bool _filtering = false;
 	int _changing = 0;
 	base::flat_set<QString> _reloadIds;
+	base::flat_map<QString, crl::time> _ignoredChanges;
 	base::flat_set<QString> _sendHooksRunning;
 	std::vector<std::pair<QString, QVariant>> _queuedEvents;
 	rpl::lifetime _lifetime;

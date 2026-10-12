@@ -2217,7 +2217,7 @@ DZG_API_MODULE({
 			Data::MessageUpdate::Flag::NewUnreadReaction
 		) | rpl::on_next([](const Data::MessageUpdate &update) {
 			if (Manager::Exists()) {
-				Manager::Get().emitEvent(
+				Manager::Get().emitEventLater(
 					u"message.reaction"_q,
 					SerializeMessage(update.item));
 			}

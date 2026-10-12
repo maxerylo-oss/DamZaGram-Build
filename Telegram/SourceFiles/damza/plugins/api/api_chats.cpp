@@ -1194,7 +1194,7 @@ void EmitTyping(
 		|| (Manager::Get().activeSession() != &history->session())) {
 		return;
 	}
-	Manager::Get().emitEvent(u"chat.typing"_q, QVariantMap{
+	Manager::Get().emitEventLater(u"chat.typing"_q, QVariantMap{
 		{ u"chat"_q, SerializePeer(history->peer) },
 		{ u"user"_q, SerializePeer(user) },
 		{ u"action"_q, action },
@@ -1268,7 +1268,7 @@ void StartUnreadTracking(SessionPtr session) {
 				i->second = now;
 			}
 			if (active) {
-				Manager::Get().emitEvent(u"chat.unread"_q, QVariantMap{
+				Manager::Get().emitEventLater(u"chat.unread"_q, QVariantMap{
 					{ u"chat"_q, SerializePeer(history->peer) },
 					{ u"unread"_q, now.unread },
 					{ u"unreadMark"_q, now.mark },

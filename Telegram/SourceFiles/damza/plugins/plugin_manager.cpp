@@ -7,6 +7,7 @@
 #include "damza/damza_lang.h"
 #include "damza/plugins/plugin_api.h"
 #include "damza/plugins/plugin_data.h"
+#include "damza/plugins/plugin_install.h"
 #include "damza/plugins/plugin_instance.h"
 #include "data/data_changes.h"
 #include "data/data_session.h"
@@ -39,6 +40,7 @@ namespace {
 
 constexpr auto kReloadDelay = 300;
 constexpr auto kMaxWatchedPerPlugin = 256;
+constexpr auto kIgnoreOwnWritesFor = crl::time(1500);
 constexpr auto kErrorToastDelay = crl::time(3000);
 
 std::unique_ptr<Manager> Global;
@@ -177,6 +179,11 @@ std::optional<Manifest> Manager::readManifest(
 	auto result = Manifest();
 	result.dir = dir;
 	result.id = root.value(u"id"_q).toString(QFileInfo(dir).fileName());
+	if (!IsValidPluginId(result.id)) {
+		// The id names files in plugins_data: never let it escape.
+		LOG(("Plugins: skipping %1, invalid id \"%2\".").arg(dir, result.id));
+		return std::nullopt;
+	}
 	result.name = root.value(u"name"_q).toString(result.id);
 	result.version = root.value(u"version"_q).toString(u"0.0.0"_q);
 	result.author = root.value(u"author"_q).toString();
@@ -372,6 +379,12 @@ void Manager::setEnabled(const QString &id, bool enabled) {
 	notifyChanged();
 }
 
+void Manager::forgetPlugin(const QString &id) {
+	_enabled.remove(id);
+	_settings.remove(id);
+	saveState();
+}
+
 void Manager::enableByDefault(const QString &id) {
 	if (_enabled.find(id) == end(_enabled)) {
 		_enabled[id] = true;
@@ -511,9 +524,23 @@ void Manager::watchFiles() {
 		[=](const QString &path) { scheduleReload(path); });
 }
 
+void Manager::ignoreFileChange(const QString &path) {
+	const auto until = crl::now() + kIgnoreOwnWritesFor;
+	const auto file = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+	_ignoredChanges[file] = until;
+	_ignoredChanges[QFileInfo(file).absolutePath()] = until;
+}
+
 void Manager::scheduleReload(const QString &path) {
 	const auto root = QDir(pluginsPath()).absolutePath();
 	const auto changed = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+	if (const auto i = _ignoredChanges.find(changed)
+		; i != end(_ignoredChanges)) {
+		if (i->second >= crl::now()) {
+			return;
+		}
+		_ignoredChanges.erase(i);
+	}
 	if (changed == root) {
 		_rescanScheduled = true;
 	} else {
@@ -586,7 +613,7 @@ void Manager::trackAccounts() {
 void Manager::trackSession(not_null<Main::Session*> session) {
 	session->data().newItemAdded(
 	) | rpl::on_next([=](not_null<HistoryItem*> item) {
-		if (Exists() && !Get()._instances.empty()) {
+		if (Exists() && Get().anyListens(u"message.new"_q)) {
 			Get().emitEventLater(u"message.new"_q, SerializeMessage(item));
 		}
 	}, session->lifetime());
@@ -599,7 +626,7 @@ void Manager::trackSession(not_null<Main::Session*> session) {
 		}
 		auto &manager = Get();
 		manager._filterCache.erase(update.item->fullId());
-		if (!manager._instances.empty()) {
+		if (manager.anyListens(u"message.edited"_q)) {
 			manager.emitEventLater(
 				u"message.edited"_q,
 				SerializeMessage(update.item));
@@ -621,10 +648,16 @@ void Manager::emitEvent(const QString &event, const QVariant &payload) {
 	const auto data = QVariant(Event(event, payload));
 	// Handlers may reload plugins, so iterate over a snapshot of ids.
 	for (const auto &id : loadedIds()) {
-		if (const auto plugin = instance(id)) {
+		if (const auto plugin = instance(id); plugin && plugin->listens(event)) {
 			plugin->dispatch(u"event"_q, data);
 		}
 	}
+}
+
+bool Manager::anyListens(const QString &event) const {
+	return ranges::any_of(_instances, [&](const auto &instance) {
+		return instance->listens(event);
+	});
 }
 
 void Manager::emitEventLater(const QString &event, const QVariant &payload) {
@@ -689,12 +722,23 @@ void Manager::refilterNow() {
 }
 
 void Manager::reportError(const QString &id, const QString &error) {
+	// Errors may come from plugin JS running inside client layout or
+	// painting: never create or destroy widgets synchronously here.
+	const auto line = error.section('\n', 0, 0);
+	auto changed = false;
 	for (auto &state : _plugins) {
-		if (state.manifest.id == id) {
-			state.error = error.section('\n', 0, 0);
+		if (state.manifest.id == id && state.error != line) {
+			state.error = line;
+			changed = true;
 		}
 	}
-	notifyChanged();
+	if (changed) {
+		crl::on_main([] {
+			if (Exists()) {
+				Get().notifyChanged();
+			}
+		});
+	}
 	if (!_devMode) {
 		return;
 	}
@@ -704,10 +748,12 @@ void Manager::reportError(const QString &id, const QString &error) {
 		return;
 	}
 	last = now;
-	Ui::Toast::Show(Ui::Toast::Config{
-		.title = Damza::Text("Plugin error", "Ошибка плагина")
-			+ u": "_q + id,
-		.text = { error.section('\n', 0, 0) },
+	crl::on_main([=] {
+		Ui::Toast::Show(Ui::Toast::Config{
+			.title = Damza::Text("Plugin error", "Ошибка плагина")
+				+ u": "_q + id,
+			.text = { line },
+		});
 	});
 }
 
@@ -836,7 +882,7 @@ bool Manager::beforeSend(Api::MessageToSend &message) {
 }
 
 void Manager::messageDeleted(not_null<HistoryItem*> item) {
-	if (!_instances.empty()) {
+	if (anyListens(u"message.deleted"_q)) {
 		emitEventLater(u"message.deleted"_q, SerializeMessage(item));
 	}
 }

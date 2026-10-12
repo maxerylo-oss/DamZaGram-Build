@@ -22,7 +22,8 @@ PRIVATE
 set_target_properties(damza_quickjs PROPERTIES C_STANDARD 11)
 if (MSVC)
     target_compile_definitions(damza_quickjs PRIVATE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601)
-    target_compile_options(damza_quickjs PRIVATE /W0 /O2)
+    # /O2 can't be combined with the /RTC1 of Debug configurations.
+    target_compile_options(damza_quickjs PRIVATE /W0 $<$<NOT:$<CONFIG:Debug>>:/O2>)
 else()
     # The engine is slow at -O0, keep it optimized even in Debug.
     target_compile_options(damza_quickjs PRIVATE -w -O2)

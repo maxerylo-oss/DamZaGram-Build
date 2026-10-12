@@ -210,6 +210,10 @@ std::vector<Js::NativeMethod> Bridge::methods() {
 	const auto none = QVariant();
 	return {
 		{ "log", [=](const Args &a) { log(str(a, 0), str(a, 1)); return none; } },
+		{ "setListens", [=](const Args &a) {
+			_instance->setListens(str(a, 0), a.value(1).toBool());
+			return none;
+		} },
 		{ "setHooks", [=](const Args &a) {
 			setHooks(a.value(0).toBool(), a.value(1).toBool());
 			return none;
@@ -905,8 +909,12 @@ bool Bridge::deleteMessages(
 	if (list.empty()) {
 		return false;
 	}
-	session->data().histories().deleteMessages(list, revoke);
-	session->data().sendHistoryChangeNotifications();
+	// Items are destroyed locally right away: never inside a client
+	// notification that still holds them (message.new handlers etc).
+	crl::on_main(session, [=] {
+		session->data().histories().deleteMessages(list, revoke);
+		session->data().sendHistoryChangeNotifications();
+	});
 	return true;
 }
 
@@ -1000,6 +1008,8 @@ QVariant Bridge::readFile(const QString &path) const {
 bool Bridge::writeFile(const QString &path, const QString &text) {
 	const auto resolved = resolvePath(path);
 	QDir().mkpath(QFileInfo(resolved).absolutePath());
+	// Writing into its own folder must not hot reload the plugin forever.
+	Manager::Get().ignoreFileChange(resolved);
 	auto file = QFile(resolved);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
 		return false;
