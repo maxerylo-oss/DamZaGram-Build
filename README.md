@@ -139,6 +139,8 @@ Use `-workdir <path>` to run with any other folder. Linux application id: `com.d
 
 ## Building on Arch Linux
 
+Install packages and builds for other distributions: see [INSTALL.md](INSTALL.md) (in Russian).
+
 ### 1. Dependencies
 
 ```bash

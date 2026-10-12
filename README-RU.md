@@ -139,6 +139,8 @@ DamZaGram хранит данные отдельно от Telegram Desktop и Ay
 
 ## Сборка на Arch Linux
 
+Установка из пакета и сборка под другие дистрибутивы — в [INSTALL.md](INSTALL.md).
+
 ### 1. Зависимости
 
 ```bash

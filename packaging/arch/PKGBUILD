@@ -1,0 +1,44 @@
+# Maintainer: wetakush <https://t.me/wetakush>
+#
+# Packages the DamZaGram binary that is already built in ../../out
+# (cmake --build out --target Telegram). Nothing is compiled here.
+# Easiest way: tools/damza/make-arch-package.sh
+
+pkgname=damzagram
+pkgver=7.2.9
+pkgrel=1
+pkgdesc="Telegram client with a JavaScript plugin system (AyuGram fork) by @wetakush"
+arch=('x86_64')
+url="https://github.com/wetakush/DamZaGram"
+license=('GPL-3.0-or-later WITH OpenSSL-exception')
+depends=('abseil-cpp' 'ada' 'cmark-gfm' 'ffmpeg' 'glib2' 'glibc'
+         'hicolor-icon-theme' 'hunspell' 'kcoreaddons' 'libavif' 'libfido2'
+         'libgcc' 'libheif' 'libjpeg-turbo' 'libjxl' 'libpipewire' 'libsrtp'
+         'libstdc++' 'libvpx' 'libxcb' 'libxcomposite' 'libxdamage' 'libxext'
+         'libxfixes' 'libxkbcommon' 'libxrandr' 'libxtst' 'lz4' 'minizip'
+         'openal' 'openh264' 'openssl' 'opus' 'pipewire' 'qt6-base'
+         'qt6-declarative' 'qt6-imageformats' 'qt6-svg' 'qt6-wayland'
+         'rnnoise' 'tlottie' 'xxhash' 'zlib')
+optdepends=('webkit2gtk-4.1: embedded browser features'
+            'xdg-desktop-portal: desktop integration')
+makedepends=('cmake')
+options=('strip' '!debug')
+
+_root="$(cd "$startdir/../.." && pwd)"
+_build="${DZG_BUILD_DIR:-$_root/out}"
+
+pkgver() {
+	sed -n 's/^AppVersionStr[[:space:]]\+//p' "$_root/Telegram/build/version"
+}
+
+package() {
+	if [[ ! -x "$_build/bin/DamZaGram" ]]; then
+		error "No DamZaGram binary in $_build/bin: build it first."
+		return 1
+	fi
+	DESTDIR="$pkgdir" cmake --install "$_build" --prefix /usr
+	# The service file keeps the prefix the build was configured with.
+	sed -i 's|^Exec=.*/DamZaGram$|Exec=/usr/bin/DamZaGram|' \
+		"$pkgdir/usr/share/dbus-1/services/com.damzagram.desktop.service"
+	install -Dm644 "$_root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
