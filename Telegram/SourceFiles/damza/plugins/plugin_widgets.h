@@ -22,6 +22,7 @@ namespace Damza::Plugins {
 struct WidgetCallContext {
 	Fn<QVariant(QWidget*)> wrap;
 	Fn<QVariant(const QList<QWidget*>&)> wrapList;
+	Fn<QString(const QString&)> resolvePath;
 };
 
 // Runs a `Widget` method from the JS API on a live widget.

@@ -800,7 +800,7 @@ InstallResult InstallPackage(const Package &package, bool enable) {
 	if (updated) {
 		manager.reload(id);
 	} else {
-		manager.rescan();
+		manager.refresh();
 	}
 	if (enable && !wasEnabled) {
 		manager.setEnabled(id, true);
@@ -828,7 +828,7 @@ bool UninstallPlugin(const QString &id, bool removeData, QString *error) {
 	if (removed && removeData) {
 		QFile::remove(PluginDataFile(id));
 	}
-	manager.rescan();
+	manager.refresh();
 	if (!removed) {
 		*error = Damza::Text("Can't remove %1", "Не удалось удалить %1").arg(dir);
 	}
@@ -877,7 +877,7 @@ InstallResult CreatePlugin(const ScaffoldOptions &options) {
 		return { .error = Damza::Text("Can't write to %1", "Не удалось записать в %1").arg(dir) };
 	}
 	WriteTypesInto(dir);
-	manager.rescan();
+	manager.refresh();
 	manager.setEnabled(options.id, true);
 	return { .id = options.id };
 }
@@ -913,7 +913,7 @@ QString EnsureScratchPlugin(QString *error) {
 			return QString();
 		}
 		WriteTypesInto(dir);
-		manager.rescan();
+		manager.refresh();
 	}
 	if (!manager.instance(id)) {
 		manager.setEnabled(id, true);

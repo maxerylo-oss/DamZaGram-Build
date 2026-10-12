@@ -2,6 +2,8 @@
 // a fork of AyuGram for Desktop.
 #include "damza/plugins/plugin_bridge.h"
 
+#include "base/flat_set.h"
+
 #include "api/api_common.h"
 #include "api/api_editing.h"
 #include "apiwrap.h"
@@ -51,7 +53,37 @@
 namespace Damza::Plugins {
 namespace {
 
-std::optional<QByteArray> SavedPalette;
+// The client's palette without any plugin colors, captured before the
+// first override. Every plugin keeps its own overrides, so one plugin's
+// reset() never wipes colors set by another.
+std::optional<QByteArray> BasePalette;
+std::vector<Bridge*> AllBridges;
+bool PaletteNotifyScheduled = false;
+
+[[nodiscard]] bool ApplyPaletteColor(
+		const QByteArray &name,
+		const QColor &color) {
+	const auto result = style::main_palette::setColor(
+		QLatin1String(name.constData(), name.size()),
+		uchar(color.red()),
+		uchar(color.green()),
+		uchar(color.blue()),
+		uchar(color.alpha()));
+	// Duplicate means "overrode a color the theme had set": still applied.
+	return (result == style::palette::SetResult::Ok)
+		|| (result == style::palette::SetResult::Duplicate);
+}
+
+void SchedulePaletteNotify() {
+	if (PaletteNotifyScheduled) {
+		return;
+	}
+	PaletteNotifyScheduled = true;
+	crl::on_main([] {
+		PaletteNotifyScheduled = false;
+		style::NotifyPaletteChanged();
+	});
+}
 
 [[nodiscard]] QVariant JsonToVariant(const QJsonValue &value) {
 	return value.toVariant();
@@ -121,13 +153,37 @@ private:
 
 Bridge::Bridge(not_null<Instance*> instance)
 : _instance(instance) {
+	AllBridges.push_back(this);
+}
+
+void Bridge::ForgetThemeOverrides() {
+	BasePalette = std::nullopt;
+	// The new palette may still be loading: reapply on the next loop.
+	crl::on_main([] {
+		const auto any = ranges::any_of(AllBridges, [](Bridge *bridge) {
+			return !bridge->_themeOverrides.empty();
+		});
+		if (!any || BasePalette) {
+			return;
+		}
+		BasePalette = style::main_palette::save();
+		for (const auto bridge : AllBridges) {
+			for (const auto &[name, color] : bridge->_themeOverrides) {
+				[[maybe_unused]] const auto ok = ApplyPaletteColor(name, color);
+			}
+		}
+		SchedulePaletteNotify();
+	});
 }
 
 Bridge::~Bridge() {
+	AllBridges.erase(
+		ranges::remove(AllBridges, this),
+		end(AllBridges));
 	for (const auto &widget : base::take(_created)) {
 		delete widget.data();
 	}
-	if (_themeChanged) {
+	if (!_themeOverrides.empty()) {
 		resetTheme();
 	}
 	for (const auto &[id, timer] : _timers) {
@@ -184,6 +240,7 @@ std::vector<Js::NativeMethod> Bridge::methods() {
 			return QVariant(setThemeColor(str(a, 0), str(a, 1)));
 		} },
 		{ "resetTheme", [=](const Args &) { resetTheme(); return none; } },
+		{ "themeColor", [=](const Args &a) { return themeColor(str(a, 0)); } },
 		{ "currentChat", [=](const Args &) { return currentChat(); } },
 		{ "getPeer", [=](const Args &a) { return getPeer(str(a, 0)); } },
 		{ "findPeer", [=](const Args &a) { return findPeer(str(a, 0)); } },
@@ -528,6 +585,9 @@ QVariant Bridge::widgetCall(
 		.wrapList = [=](const QList<QWidget*> &list) {
 			return widgetIds(list);
 		},
+		.resolvePath = [=](const QString &path) {
+			return resolvePath(path);
+		},
 	});
 	if (!result) {
 		_instance->log(u"error"_q, u"Unknown widget method: "_q + method);
@@ -653,34 +713,55 @@ bool Bridge::setThemeColor(const QString &name, const QString &color) {
 	if (!parsed.isValid()) {
 		return false;
 	}
-	if (!SavedPalette) {
-		SavedPalette = style::main_palette::save();
-	}
 	const auto latin = name.toLatin1();
-	const auto result = style::main_palette::setColor(
-		QLatin1String(latin.constData(), latin.size()),
-		uchar(parsed.red()),
-		uchar(parsed.green()),
-		uchar(parsed.blue()),
-		uchar(parsed.alpha()));
-	// Duplicate means "overrode a color the theme had set": still applied.
-	if (result != style::palette::SetResult::Ok
-		&& result != style::palette::SetResult::Duplicate) {
+	if (style::internal::GetPaletteIndex(
+			QLatin1String(latin.constData(), latin.size())) < 0) {
 		return false;
 	}
-	_themeChanged = true;
-	style::NotifyPaletteChanged();
+	if (!BasePalette) {
+		BasePalette = style::main_palette::save();
+	}
+	if (!ApplyPaletteColor(latin, parsed)) {
+		return false;
+	}
+	_themeOverrides[latin] = parsed;
+	SchedulePaletteNotify();
 	return true;
 }
 
+QVariant Bridge::themeColor(const QString &name) const {
+	const auto latin = name.toLatin1();
+	const auto index = style::internal::GetPaletteIndex(
+		QLatin1String(latin.constData(), latin.size()));
+	if (index < 0) {
+		return QVariant();
+	}
+	const auto color = style::main_palette::get()->colorAtIndex(index)->c;
+	return (color.alpha() == 255)
+		? color.name(QColor::HexRgb)
+		: color.name(QColor::HexArgb);
+}
+
 void Bridge::resetTheme() {
-	if (!SavedPalette) {
+	if (_themeOverrides.empty()) {
 		return;
 	}
-	style::main_palette::load(*SavedPalette);
-	SavedPalette = std::nullopt;
-	_themeChanged = false;
-	style::NotifyPaletteChanged();
+	_themeOverrides.clear();
+	if (!BasePalette) {
+		return;
+	}
+	style::main_palette::load(*BasePalette);
+	auto any = false;
+	for (const auto bridge : AllBridges) {
+		for (const auto &[name, color] : bridge->_themeOverrides) {
+			[[maybe_unused]] const auto ok = ApplyPaletteColor(name, color);
+			any = true;
+		}
+	}
+	if (!any) {
+		BasePalette = std::nullopt;
+	}
+	SchedulePaletteNotify();
 }
 
 QVariant Bridge::currentChat() const {

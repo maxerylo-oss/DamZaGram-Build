@@ -23,6 +23,10 @@ public:
 	explicit Bridge(not_null<Instance*> instance);
 	~Bridge();
 
+	// The client loaded another palette (theme or night mode switch):
+	// take it as the new base and put plugin overrides back on top.
+	static void ForgetThemeOverrides();
+
 	[[nodiscard]] std::vector<Js::NativeMethod> methods();
 
 	// Core.
@@ -62,6 +66,7 @@ public:
 		const QVariantList &args);
 	void repaintAll();
 	[[nodiscard]] bool setThemeColor(const QString &name, const QString &color);
+	[[nodiscard]] QVariant themeColor(const QString &name) const;
 	void resetTheme();
 
 	// Chats and messages.
@@ -124,7 +129,9 @@ private:
 	std::map<int, QPointer<QWidget>> _widgetsById;
 	std::map<QWidget*, int> _widgetIds;
 	std::vector<QPointer<QWidget>> _created;
-	bool _themeChanged = false;
+	// Palette colors this plugin overrides, reapplied in plugin order over
+	// the client's palette. See ApplyThemeLayers in plugin_bridge.cpp.
+	base::flat_map<QByteArray, QColor> _themeOverrides;
 	int _nextTimerId = 0;
 	int _nextBoxId = 0;
 	int _nextRequestId = 0;

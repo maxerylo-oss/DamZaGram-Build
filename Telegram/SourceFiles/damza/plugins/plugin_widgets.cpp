@@ -2,6 +2,8 @@
 // a fork of AyuGram for Desktop.
 #include "damza/plugins/plugin_widgets.h"
 
+#include "ui/rp_widget.h"
+#include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 
@@ -51,6 +53,11 @@ namespace {
 		return edit->text();
 	} else if (const auto button = qobject_cast<QAbstractButton*>(widget)) {
 		return button->text();
+	} else if (const auto rp = dynamic_cast<Ui::RpWidget*>(widget.get())) {
+		const auto name = rp->accessibilityName();
+		if (!name.isEmpty()) {
+			return name;
+		}
 	}
 	return widget->windowTitle();
 }
@@ -67,6 +74,15 @@ void SetWidgetText(not_null<QWidget*> widget, const QString &text) {
 		edit->setText(text);
 	} else if (const auto button = qobject_cast<QAbstractButton*>(widget)) {
 		button->setText(text);
+	} else if (const auto round = dynamic_cast<Ui::RoundButton*>(
+			widget.get())) {
+		round->setText(rpl::single(text));
+	} else if (const auto flat = dynamic_cast<Ui::FlatButton*>(
+			widget.get())) {
+		flat->setText(text);
+	} else if (const auto link = dynamic_cast<Ui::LinkButton*>(
+			widget.get())) {
+		link->setText(text);
 	}
 }
 
@@ -310,7 +326,10 @@ std::optional<QVariant> CallWidgetMethod(
 		TypeText(widget, string(0));
 		return none;
 	} else if (method == u"grab"_q) {
-		return widget->grab().save(string(0));
+		const auto path = context.resolvePath
+			? context.resolvePath(string(0))
+			: string(0);
+		return widget->grab().save(path);
 	} else if (method == u"text"_q) {
 		return WidgetText(widget);
 	} else if (method == u"setText"_q) {

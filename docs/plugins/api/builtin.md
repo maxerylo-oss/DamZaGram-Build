@@ -7,7 +7,7 @@
    `tdata/plugins/<id>/`. Что они умеют — в [builtins.md](../builtins.md).
 2. **Связывает команды плагинов.** `dzg.commands.all()` видит слеш-команды
    всех загруженных плагинов, а `dzg.commands.run()` выполняет любую из них.
-   На этом построена командная палитра (Ctrl+K).
+   На этом построена командная палитра (Ctrl+Shift+K).
 
 Типы: [`types/builtin.d.ts`](../types/builtin.d.ts). Исходник:
 `Telegram/SourceFiles/damza/plugins/api/api_builtin.cpp`.

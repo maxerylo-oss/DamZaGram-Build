@@ -51,12 +51,19 @@ DZG_API_MODULE({
 )DZG_JS");
 	},
 	.appStarted = [] {
-		Window::Theme::IsNightModeValue(
-		) | rpl::skip(1) | rpl::on_next([](bool night) {
+		// Fires for night mode switches and for any other theme the user
+		// applies, so plugins can put their colors back on top of it.
+		Window::Theme::Background()->updates(
+		) | rpl::filter([](const Window::Theme::BackgroundUpdate &update) {
+			return update.paletteChanged();
+		}) | rpl::on_next([](const Window::Theme::BackgroundUpdate &) {
+			Bridge::ForgetThemeOverrides();
 			if (Manager::Exists()) {
 				Manager::Get().emitEvent(
 					u"theme.changed"_q,
-					QVariantMap{ { u"night"_q, night } });
+					QVariantMap{
+						{ u"night"_q, Window::Theme::IsNightMode() },
+					});
 			}
 		}, Manager::Get().lifetime());
 	},

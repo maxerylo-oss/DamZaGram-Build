@@ -52,7 +52,7 @@ Shipped with the client and enabled in one click (Settings → DamZaGram Prefere
 
 | Plugin | What it does |
 |---|---|
-| Command palette | `Ctrl+K`: fuzzy search over chats, plugin commands and client actions |
+| Command palette | `Ctrl+Shift+K`: fuzzy search over chats, plugin commands and client actions |
 | Deleted messages | Tells you who deleted what and where; journal of deleted messages |
 | Keyword alerts | Notifies when a word or `/regex/` appears in any chat |
 | Reminders | `/remind 10m buy bread`, `/remind 18:30 call`, "Remind me…" in the message menu |

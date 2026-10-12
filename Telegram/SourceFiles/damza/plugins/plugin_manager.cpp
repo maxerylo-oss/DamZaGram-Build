@@ -28,6 +28,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
+#include <QtCore/QDirIterator>
 #include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QThread>
@@ -38,6 +39,7 @@ namespace Damza::Plugins {
 namespace {
 
 constexpr auto kReloadDelay = 300;
+constexpr auto kMaxWatchedPerPlugin = 256;
 constexpr auto kErrorToastDelay = crl::time(3000);
 
 std::unique_ptr<Manager> Global;
@@ -181,16 +183,13 @@ std::optional<Manifest> Manager::readManifest(
 	result.description = root.value(u"description"_q).toString();
 	result.main = root.value(u"main"_q).toString(u"main.js"_q);
 	result.type = root.value(u"type"_q).toString(u"module"_q);
+	result.builtin = root.value(u"builtin"_q).toBool();
 	result.settings = root.value(u"settings"_q).toArray();
 	return result;
 }
 
-void Manager::rescan() {
-	while (!_instances.empty()) {
-		unloadPlugin(_instances.back()->manifest().id);
-	}
-	_plugins.clear();
-
+std::vector<PluginState> Manager::scanDirectory() const {
+	auto result = std::vector<PluginState>();
 	const auto root = QDir(pluginsPath());
 	const auto dirs = root.entryList(
 		QDir::Dirs | QDir::NoDotAndDotDot,
@@ -201,7 +200,7 @@ void Manager::rescan() {
 		if (!manifest) {
 			continue;
 		}
-		const auto duplicate = ranges::any_of(_plugins, [&](const auto &p) {
+		const auto duplicate = ranges::any_of(result, [&](const auto &p) {
 			return p.manifest.id == manifest->id;
 		});
 		if (duplicate) {
@@ -210,8 +209,47 @@ void Manager::rescan() {
 		auto state = PluginState{ .manifest = *manifest, .error = error };
 		const auto i = _enabled.find(manifest->id);
 		state.enabled = (i != end(_enabled)) && i->second;
-		_plugins.push_back(std::move(state));
+		result.push_back(std::move(state));
 	}
+	return result;
+}
+
+void Manager::refresh() {
+	auto scanned = scanDirectory();
+	const auto same = [](const Manifest &a, const Manifest &b) {
+		return (a.dir == b.dir)
+			&& (a.main == b.main)
+			&& (a.type == b.type)
+			&& (a.version == b.version);
+	};
+	for (const auto &old : base::duplicate(_plugins)) {
+		const auto i = ranges::find(scanned, old.manifest.id, [](
+				const PluginState &state) {
+			return state.manifest.id;
+		});
+		if (i == end(scanned) || !same(i->manifest, old.manifest)) {
+			unloadPlugin(old.manifest.id);
+		} else {
+			i->loaded = old.loaded;
+			i->error = old.error.isEmpty() ? i->error : old.error;
+		}
+	}
+	_plugins = std::move(scanned);
+	for (auto &state : _plugins) {
+		if (state.enabled && !instance(state.manifest.id)) {
+			loadPlugin(state);
+		}
+	}
+	invalidateFilters();
+	watchFiles();
+	notifyChanged();
+}
+
+void Manager::rescan() {
+	while (!_instances.empty()) {
+		unloadPlugin(_instances.back()->manifest().id);
+	}
+	_plugins = scanDirectory();
 	for (auto &state : _plugins) {
 		if (state.enabled && state.error.isEmpty()) {
 			loadPlugin(state);
@@ -231,6 +269,12 @@ void Manager::loadPlugin(PluginState &state) {
 	if (!raw->load()) {
 		state.error = raw->error();
 		state.loaded = false;
+		// main.js may have registered buttons or menus before it threw.
+		for (const auto &module : ApiModules()) {
+			if (module.pluginUnloaded) {
+				module.pluginUnloaded(state.manifest.id);
+			}
+		}
 		_instances.pop_back();
 		return;
 	}
@@ -395,57 +439,72 @@ void Manager::watchFiles() {
 	_watcher = std::make_unique<QFileSystemWatcher>();
 	_watcher->addPath(pluginsPath());
 	for (const auto &state : _plugins) {
-		const auto dir = QDir(state.manifest.dir);
-		_watcher->addPath(dir.absolutePath());
-		const auto files = dir.entryList(QDir::Files);
-		for (const auto &file : files) {
-			_watcher->addPath(dir.filePath(file));
+		const auto root = QDir(state.manifest.dir).absolutePath();
+		auto paths = QStringList{ root };
+		auto it = QDirIterator(
+			root,
+			QDir::AllEntries | QDir::NoDotAndDotDot,
+			QDirIterator::Subdirectories);
+		while (it.hasNext() && paths.size() < kMaxWatchedPerPlugin) {
+			const auto path = it.next();
+			const auto name = it.fileName();
+			if (name.startsWith('.') || name == u"node_modules"_q) {
+				continue;
+			}
+			paths.push_back(path);
 		}
+		_watcher->addPaths(paths);
 	}
-	const auto schedule = [=](const QString &path) {
-		if (_reloadScheduled) {
-			return;
-		}
-		_reloadScheduled = true;
-		const auto root = QDir(pluginsPath()).absolutePath();
-		auto id = QString();
-		for (const auto &state : _plugins) {
-			const auto dir = QDir(state.manifest.dir).absolutePath();
-			if (path.startsWith(dir)) {
-				id = state.manifest.id;
-			}
-		}
-		if (QDir(path).absolutePath() == root) {
-			id = QString();
-		}
-		QTimer::singleShot(kReloadDelay, [=] {
-			if (!Exists()) {
-				return;
-			}
-			auto &manager = Get();
-			manager._reloadScheduled = false;
-			if (id.isEmpty()) {
-				LOG(("Plugins: rescanning after a change in %1").arg(path));
-				manager.rescan();
-			} else {
-				LOG(("Plugins: hot reload of %1").arg(id));
-				manager.reload(id);
-				if (const auto plugin = manager.instance(id)) {
-					Ui::Toast::Show(Damza::Text(
-						"Plugin reloaded",
-						"Плагин перезагружен") + u": "_q + plugin->manifest().name);
-				}
-			}
-		});
-	};
 	QObject::connect(
 		_watcher.get(),
 		&QFileSystemWatcher::fileChanged,
-		schedule);
+		[=](const QString &path) { scheduleReload(path); });
 	QObject::connect(
 		_watcher.get(),
 		&QFileSystemWatcher::directoryChanged,
-		schedule);
+		[=](const QString &path) { scheduleReload(path); });
+}
+
+void Manager::scheduleReload(const QString &path) {
+	const auto root = QDir(pluginsPath()).absolutePath();
+	const auto changed = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+	if (changed == root) {
+		_rescanScheduled = true;
+	} else {
+		for (const auto &state : _plugins) {
+			const auto dir = QDir(state.manifest.dir).absolutePath();
+			if (changed == dir || changed.startsWith(dir + '/')) {
+				_reloadIds.emplace(state.manifest.id);
+			}
+		}
+	}
+	if (_reloadScheduled) {
+		return;
+	}
+	_reloadScheduled = true;
+	QTimer::singleShot(kReloadDelay, [] {
+		if (!Exists()) {
+			return;
+		}
+		auto &manager = Get();
+		manager._reloadScheduled = false;
+		const auto rescan = base::take(manager._rescanScheduled);
+		const auto ids = base::take(manager._reloadIds);
+		if (rescan) {
+			LOG(("Plugins: plugins folder changed, refreshing."));
+			manager.refresh();
+		}
+		for (const auto &id : ids) {
+			const auto was = manager.instance(id);
+			LOG(("Plugins: hot reload of %1").arg(id));
+			manager.reload(id);
+			if (const auto plugin = manager.instance(id); plugin && was) {
+				Ui::Toast::Show(Damza::Text(
+					"Plugin reloaded",
+					"Плагин перезагружен") + u": "_q + plugin->manifest().name);
+			}
+		}
+	});
 }
 
 void Manager::trackAccounts() {

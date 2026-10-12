@@ -1187,15 +1187,19 @@ int PlaceSidePanels(not_null<Window::MainWindow*> window, QRect area) {
 		return 0;
 	}
 	const auto controller = window->sessionController();
-	const auto available = area.width() - st::windowMinWidth;
 	if (host->empty()
 		|| !controller
-		|| window->controller().locked()
-		|| available < kMinPanelWidth) {
+		|| window->controller().locked()) {
 		host->hide();
 		return 0;
 	}
-	const auto width = std::min(host->desiredWidth(), available);
+	// Dock as a column when the window is wide enough, otherwise float
+	// over the right part of the chat instead of disappearing.
+	const auto available = area.width() - st::windowMinWidth;
+	const auto docked = (available >= kMinPanelWidth);
+	const auto width = docked
+		? std::min(host->desiredWidth(), available)
+		: std::min(host->desiredWidth(), area.width());
 	host->setGeometry(
 		area.x() + area.width() - width,
 		area.y(),
@@ -1203,9 +1207,13 @@ int PlaceSidePanels(not_null<Window::MainWindow*> window, QRect area) {
 		area.height());
 	if (host->isHidden()) {
 		host->show();
-		host->stackUnder(controller->content());
 	}
-	return width;
+	if (docked) {
+		host->stackUnder(controller->content());
+	} else {
+		host->raise();
+	}
+	return docked ? width : 0;
 }
 
 TextWithEntities DisplayText(

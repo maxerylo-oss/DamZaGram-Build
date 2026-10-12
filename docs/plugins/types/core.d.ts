@@ -295,8 +295,10 @@ interface DzgTheme {
   /** Имя цвета палитры Telegram (windowBg, msgOutBg, ...). Цвет: #RRGGBB или #AARRGGBB. */
   set(name: string, color: string): boolean;
   setMany(colors: Record<string, string>): boolean;
-  /** Вернуть палитру, какой она была до первого изменения плагинами. */
+  /** Убрать цвета, заданные этим плагином. Цвета других плагинов остаются. Вызывается сам при выгрузке. */
   reset(): void;
+  /** Текущий цвет палитры: '#rrggbb' или '#aarrggbb'; null для неизвестного имени. */
+  get(name: string): string | null;
 }
 
 interface DzgChats {

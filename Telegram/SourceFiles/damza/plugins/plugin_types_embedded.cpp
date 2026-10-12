@@ -799,8 +799,10 @@ interface DzgTheme {
   /** Имя цвета палитры Telegram (windowBg, msgOutBg, ...). Цвет: #RRGGBB или #AARRGGBB. */
   set(name: string, color: string): boolean;
   setMany(colors: Record<string, string>): boolean;
-  /** Вернуть палитру, какой она была до первого изменения плагинами. */
+  /** Убрать цвета, заданные этим плагином. Цвета других плагинов остаются. Вызывается сам при выгрузке. */
   reset(): void;
+  /** Текущий цвет палитры: '#rrggbb' или '#aarrggbb'; null для неизвестного имени. */
+  get(name: string): string | null;
 }
 
 interface DzgChats {
@@ -1528,7 +1530,7 @@ interface DzgUi {
 R"DZG_TYPES(  addMainMenuItem(spec: MainMenuItemSpec): () => void;
   /**
    * Горячая клавиша на всё приложение, синтаксис Qt: 'Ctrl+Shift+K', 'Alt+F1', 'F8'.
-   * Только одно сочетание (без аккордов 'Ctrl+K, Ctrl+C') — иначе исключение.
+   * Только одно сочетание (без аккордов 'Ctrl+Shift+K, Ctrl+C') — иначе исключение.
    * Без Ctrl/Alt/Meta и не F-клавиша — не срабатывает, пока фокус в текстовом поле.
    * Сочетание плагина важнее сочетаний клиента.
    */

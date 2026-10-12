@@ -11,12 +11,12 @@ assert(fuzzyScore('впк', 'Вася Пупкин') > 0, 'subsequence matches')
 assert(fuzzyScore('xyz', 'Вася') < 0);
 
 // Registration.
-assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+K'), 'Ctrl+K registered');
+assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+Shift+K'), 'Ctrl+Shift+K registered');
 assert(mock.mainMenu.some((m) => m.title === 'Командная палитра'), 'main menu item');
 assert(dzg.commands.list().some((c) => c.name === 'palette'), '/palette registered');
 
 // Open with the shortcut: input, hint, result buttons.
-mock.shortcut('Ctrl+K');
+mock.shortcut('Ctrl+Shift+K');
 let panel = mock.lastPanel();
 assert(panel && panel.open, 'panel opened');
 assert(mock.input(panel), 'has input');
@@ -50,7 +50,7 @@ await mock.tick();
 eq(mock.night, false, 'night mode toggled off');
 
 // Commands insert into the compose field.
-mock.shortcut('Ctrl+K');
+mock.shortcut('Ctrl+Shift+K');
 panel = mock.lastPanel();
 mock.type(panel, '/pal');
 mock.click(panel, '/palette');
@@ -58,7 +58,7 @@ await mock.tick();
 eq(mock.compose.text, '/palette ');
 
 // Deep links for settings.
-mock.shortcut('Ctrl+K');
+mock.shortcut('Ctrl+Shift+K');
 panel = mock.lastPanel();
 mock.type(panel, 'папки');
 mock.click(panel, 'папки');
@@ -66,9 +66,9 @@ await mock.tick();
 eq(mock.links[mock.links.length - 1], 'tg://settings/folders');
 
 // Toggle: the shortcut closes an open palette.
-mock.shortcut('Ctrl+K');
+mock.shortcut('Ctrl+Shift+K');
 panel = mock.lastPanel();
-mock.shortcut('Ctrl+K');
+mock.shortcut('Ctrl+Shift+K');
 assert(!panel.open, 'second press closes');
 
 // Frecency: a picked item ranks first for an empty query.
@@ -86,7 +86,7 @@ eq(search('', sources)[0].key, 'chat:100', 'recently used chat goes first');
 sandbox.settings.shortcut = 'Ctrl+Shift+P';
 sandbox.event('settings.changed', { key: 'shortcut', value: 'Ctrl+Shift+P' });
 assert(mock.shortcuts.some((s) => s.keys === 'Ctrl+Shift+P' && !s.removed), 'new shortcut');
-assert(mock.shortcuts.filter((s) => s.keys === 'Ctrl+K').every((s) => s.removed), 'old shortcut removed');
+assert(mock.shortcuts.filter((s) => s.keys === 'Ctrl+Shift+K').every((s) => s.removed), 'old shortcut removed');
 
 // Plugins are toggled from the palette.
 mock.shortcut('Ctrl+Shift+P');

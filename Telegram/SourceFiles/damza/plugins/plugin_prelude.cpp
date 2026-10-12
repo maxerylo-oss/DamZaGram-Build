@@ -266,6 +266,7 @@ QString Prelude() {
 				return ok;
 			},
 			reset() { native.resetTheme(); },
+			get(name) { return native.themeColor(String(name)); },
 		},
 
 		chats: {

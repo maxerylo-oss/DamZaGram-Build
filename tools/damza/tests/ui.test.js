@@ -97,8 +97,8 @@ call(sandbox.last('ui_addShortcut').args[1]);
 eq(pressed, 1);
 offKey();
 sandbox.native.ui_addShortcut = () => 0;
-throws(() => dzg.ui.addShortcut('Ctrl+K, Ctrl+C', () => {}), 'Invalid key sequence');
-throws(() => dzg.ui.addShortcut('Ctrl+K'), 'handler');
+throws(() => dzg.ui.addShortcut('Ctrl+Shift+K, Ctrl+C', () => {}), 'Invalid key sequence');
+throws(() => dzg.ui.addShortcut('Ctrl+Shift+K'), 'handler');
 
 // --- notify
 let notified = 0;

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "base/flat_map.h"
+#include "base/flat_set.h"
 #include "damza/plugins/plugins.h"
 #include "data/data_msg_id.h"
 
@@ -36,6 +37,8 @@ struct Manifest {
 	// "module" (default): ES module, import/export, top-level await.
 	// "script": classic global script.
 	QString type = u"module"_q;
+	// Shipped with the client (plugins/builtin), see api_builtin.cpp.
+	bool builtin = false;
 	QJsonArray settings;
 	QString dir;
 };
@@ -61,7 +64,10 @@ public:
 	[[nodiscard]] QString pluginsPath() const;
 	[[nodiscard]] QString dataPath() const;
 
+	// Restarts every plugin.
 	void rescan();
+	// Picks up added / removed plugin folders, keeps the rest running.
+	void refresh();
 	[[nodiscard]] const std::vector<PluginState> &plugins() const;
 	[[nodiscard]] rpl::producer<> pluginsChanges() const;
 
@@ -107,6 +113,8 @@ public:
 	void setSendingFromPlugin(bool value);
 
 private:
+	[[nodiscard]] std::vector<PluginState> scanDirectory() const;
+	void scheduleReload(const QString &path);
 	void loadState();
 	void saveState() const;
 	[[nodiscard]] std::optional<Manifest> readManifest(
@@ -132,6 +140,8 @@ private:
 	bool _devMode = true;
 	bool _sendingFromPlugin = false;
 	bool _reloadScheduled = false;
+	bool _rescanScheduled = false;
+	base::flat_set<QString> _reloadIds;
 	rpl::lifetime _lifetime;
 
 };

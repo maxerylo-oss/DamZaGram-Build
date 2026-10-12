@@ -1,5 +1,5 @@
 // Командная палитра DamZaGram.
-// Ctrl+K (или /palette) открывает панель с поиском по чатам, командам
+// Ctrl+Shift+K (или /palette) открывает панель с поиском по чатам, командам
 // плагинов и действиям клиента. Префиксы: "@" — только чаты,
 // ">" или "/" — только команды и действия.
 // Автор: @wetakush
@@ -491,7 +491,7 @@ export function open() {
     onChange: (text) => render(text),
     onSubmit: () => pick(0),
   });
-  panel.addLabel('Enter — первый результат · @ — чаты · > — действия · ? — поиск по сообщениям · ' + setting('shortcut', 'Ctrl+K') + ' — закрыть', { muted: true });
+  panel.addLabel('Enter — первый результат · @ — чаты · > — действия · ? — поиск по сообщениям · ' + setting('shortcut', 'Ctrl+Shift+K') + ' — закрыть', { muted: true });
   panel.addSeparator();
   render('');
   if (input && input.setFocus) input.setFocus();
@@ -513,7 +513,7 @@ function bindShortcut() {
   if (removeShortcut) removeShortcut();
   removeShortcut = null;
   if (!dzg.ui.addShortcut) return;
-  const keys = String(setting('shortcut', 'Ctrl+K')).trim();
+  const keys = String(setting('shortcut', 'Ctrl+Shift+K')).trim();
   if (!keys) return;
   try {
     removeShortcut = dzg.ui.addShortcut(keys, open);
@@ -542,7 +542,7 @@ dzg.on('ready', () => {
   if (dzg.storage.get('welcomed', false)) return;
   dzg.storage.set('welcomed', true);
   setTimeout(() => {
-    dzg.ui.toast('Нажми ' + setting('shortcut', 'Ctrl+K') + ' — чаты, команды и настройки в одном окне', 'DamZaGram · командная палитра');
+    dzg.ui.toast('Нажми ' + setting('shortcut', 'Ctrl+Shift+K') + ' — чаты, команды и настройки в одном окне', 'DamZaGram · командная палитра');
   }, 4000);
 });
 

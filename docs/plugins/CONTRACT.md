@@ -1,5 +1,9 @@
 # API v2 contract (internal)
 
+> Status: implemented. Extensions beyond this contract are documented in
+> `types/*.d.ts`, `api/*.md` and `reference.md`; this file stays as the
+> design record.
+
 This file fixes the names and shapes of the plugin API v2 so that modules,
 built-in plugins and docs can be written in parallel. Implementations must
 match it exactly; anything extra is welcome but must be documented in the
@@ -29,7 +33,8 @@ find, create, repaint}`, `dzg.theme.{set, setMany, reset}`,
 get, loaded, addFilter, onBeforeSend, refilter}`, `dzg.commands`,
 `dzg.http.fetch`, `dzg.fs`, `dzg.clipboard`, `dzg.openUrl`, `dzg.require`,
 timers, console. Module `app`: `dzg.app.{language, isNightMode, setNightMode,
-restart}`, event `theme.changed {night}`.
+restart}` (types/app.d.ts), event `theme.changed {night}` — fired after
+any palette change by the client (theme applied, night mode switched).
 
 Core events: `ready`, `unload`, `session.ready`, `message.new`,
 `message.edited`, `message.deleted`, `chat.opened`, `settings.changed`.
@@ -151,7 +156,9 @@ Events: `app.focus {active: boolean}`, `compose.changed {chat: Peer, text: strin
 ## Built-in plugins (plugins/builtin/<id>/)
 
 Shipped inside the client and installed into `tdata/plugins/` on start
-(version-aware, `"builtin": true` in manifest). Enabled by default unless
-noted: `command-palette`, `text-tools`, `deleted-alerts`, `reminders`,
+(version-aware, `"builtin": true` in manifest). A folder that is a symlink,
+or whose manifest lacks `"builtin": true`, is never overwritten (the user
+replaced it). `"enabledByDefault": false` in the manifest keeps a built-in
+plugin off on first install. Enabled by default unless noted: `command-palette`, `text-tools`, `deleted-alerts`, `reminders`,
 `chat-stats`, `ai-digest` (needs API key), `keyword-alerts`, `damza-theme`,
 `anti-ads`. Disabled by default: `auto-reply`.
