@@ -1038,6 +1038,35 @@ void ShowCreateBox(std::shared_ptr<Ui::Show> show, const QString &author) {
 	}));
 }
 
+namespace {
+
+// Any .js or .zip may be a plugin; the content decides.
+[[nodiscard]] bool MaybePluginFileName(const QString &name) {
+	return IsPluginFileName(name)
+		|| name.endsWith(u".js"_q, Qt::CaseInsensitive)
+		|| name.endsWith(u".mjs"_q, Qt::CaseInsensitive)
+		|| name.endsWith(u".zip"_q, Qt::CaseInsensitive);
+}
+
+[[nodiscard]] bool LooksLikePlugin(
+		const QByteArray &bytes,
+		const QString &name) {
+	if (IsPluginFileName(name)) {
+		return true;
+	} else if (bytes.startsWith("PK\x03\x04")) {
+		// A plain archive counts only with a manifest.json inside.
+		const auto package = ReadPackageFromBytes(bytes, name);
+		return package.error.isEmpty() && !package.generatedManifest;
+	}
+	const auto code = QString::fromUtf8(bytes);
+	const auto header = ParseScriptHeader(code);
+	return !header.value(u"name"_q).toString().trimmed().isEmpty()
+		|| !header.value(u"id"_q).toString().trimmed().isEmpty()
+		|| code.contains(u"dzg."_q);
+}
+
+} // namespace
+
 bool OpenPluginFile(
 		Window::SessionController *controller,
 		const QString &fileName,
@@ -1045,22 +1074,29 @@ bool OpenPluginFile(
 	if (!controller
 		|| path.isEmpty()
 		|| !Manager::Exists()
-		|| !IsPluginFileName(fileName)) {
+		|| !MaybePluginFileName(fileName)) {
 		return false;
 	}
 	auto file = QFile(path);
 	if (!file.open(QIODevice::ReadOnly)) {
 		return false;
 	} else if (file.size() > kMaxPluginFileSize) {
+		if (!IsPluginFileName(fileName)) {
+			return false;
+		}
 		ShowInstallBox(controller->uiShow(), Package{
 			.source = fileName,
 			.error = Damza::Text("The file is too large.", "Файл слишком большой."),
 		});
 		return true;
 	}
+	const auto bytes = file.readAll();
+	if (!LooksLikePlugin(bytes, fileName)) {
+		return false;
+	}
 	ShowInstallBox(
 		controller->uiShow(),
-		ReadPackageFromBytes(file.readAll(), fileName));
+		ReadPackageFromBytes(bytes, fileName));
 	return true;
 }
 
@@ -1069,7 +1105,7 @@ bool OpenPluginDocument(
 		not_null<DocumentData*> document,
 		HistoryItem *item) {
 	const auto name = document->filename();
-	if (!controller || !Manager::Exists() || !IsPluginFileName(name)) {
+	if (!controller || !Manager::Exists() || !MaybePluginFileName(name)) {
 		return false;
 	}
 	const auto path = document->filepath(true);
