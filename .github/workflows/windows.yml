@@ -1,0 +1,121 @@
+name: Windows
+
+# Builds DamZaGram for Windows x64 on GitHub's free runners (public repo).
+# The first runs build all third-party libraries (Qt, ffmpeg, openssl, ...),
+# which takes hours and may not finish in one 6-hour job. The library folders
+# are cached and saved even on timeout, so re-running this workflow a few times
+# resumes where it left off; once the libraries are cached the build is quick.
+#
+# Run it from the Actions tab -> Windows -> Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: Build configuration
+        type: choice
+        default: Release
+        options: [Release, Debug]
+
+concurrency:
+  group: windows
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 350
+
+    env:
+      TDESKTOP_API_ID: "2040"
+      TDESKTOP_API_HASH: b18441a1ff607e10a989891a5462e627
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Prepare directories.
+        shell: pwsh
+        run: |
+          # The build expects Libraries/ and ThirdParty/ as siblings of the repo.
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\TBuild\Libraries" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\TBuild\ThirdParty" | Out-Null
+          "TBUILD=$env:GITHUB_WORKSPACE\TBuild" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Checkout.
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: TBuild/tdesktop
+
+      - name: Set up MSVC (x64).
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Restore cached libraries.
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            TBuild/Libraries
+            TBuild/ThirdParty
+          key: winlibs-${{ github.run_id }}
+          restore-keys: |
+            winlibs-
+
+      - name: Prepare third-party libraries.
+        working-directory: TBuild
+        run: |
+          set Platform=x64
+          python tdesktop\Telegram\build\prepare\prepare.py
+
+      - name: Save libraries cache.
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            TBuild/Libraries
+            TBuild/ThirdParty
+          key: winlibs-${{ github.run_id }}
+
+      - name: Configure.
+        working-directory: TBuild/tdesktop/Telegram
+        run: |
+          set Platform=x64
+          configure.bat x64 ^
+            -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+            -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON
+
+      - name: Build DamZaGram.
+        working-directory: TBuild/tdesktop
+        run: |
+          set Platform=x64
+          cmake --build out --config ${{ inputs.config }} --target Telegram
+
+      - name: Collect the build.
+        if: success()
+        shell: pwsh
+        working-directory: TBuild/tdesktop
+        run: |
+          $cfg = "${{ inputs.config }}"
+          $exe = Get-ChildItem -Path out -Recurse -Filter DamZaGram.exe -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -match "\\$cfg\\" } | Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path out -Recurse -Filter DamZaGram.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $exe) { throw "DamZaGram.exe not found under out\" }
+          Write-Host "Found: $($exe.FullName)"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $exe.FullName dist\DamZaGram.exe
+
+      - name: Upload DamZaGram.exe.
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DamZaGram-windows-x64-${{ inputs.config }}
+          path: TBuild/tdesktop/dist/DamZaGram.exe
+          if-no-files-found: error
