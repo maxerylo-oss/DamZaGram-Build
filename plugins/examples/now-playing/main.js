@@ -1,5 +1,6 @@
-// .музыка -> карточка «сейчас играет» в чат.
+// .музыка -> красивая карточка-картинка с тем, что играет, в чат.
 // Источник — локальный плеер через MPRIS (Spotify и любой другой).
+// Карточка рисуется нативно (dzg.media.renderCard) и шлётся как фото.
 // Вручную: «.музыка Radiohead - Creep».
 // Точку-префикс и кириллицу слеш-команды не ловят — перехват через onBeforeSend.
 
@@ -11,16 +12,20 @@ const setting = (key, fallback) => {
 const esc = (s) => String(s || '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// Карточка: заголовок, трек, исполнитель, альбом, ссылка + превью обложки.
-function card(track) {
-  const label = setting('label', 'Сейчас играет');
-  const lines = [];
-  // Скрытая ссылка на обложку первой — Telegram покажет её картинкой-превью.
-  if (track.cover && /^https?:\/\//i.test(track.cover)) {
-    lines.push(`<a href="${esc(track.cover)}">⁣</a>`);
+// Подпись под картинкой: исполнитель — трек + кнопка Слушать.
+function caption(track) {
+  const parts = [];
+  const line = [esc(track.artist), esc(track.title)].filter(Boolean).join(' — ');
+  if (line) parts.push(`🎧 ${line}`);
+  if (track.url && /^https?:\/\//i.test(track.url)) {
+    parts.push(`<a href="${esc(track.url)}">▶ Слушать</a>`);
   }
-  lines.push(`🎧 <b>${esc(label)}</b>`);
-  lines.push('');
+  return parts.join('\n');
+}
+
+// Текстовый фолбэк, если картинка не отрисовалась.
+function textCard(track) {
+  const lines = [`🎧 <b>${esc(setting('label', 'Сейчас играет'))}</b>`, ''];
   lines.push(`<b>${esc(track.title)}</b>`);
   let sub = esc(track.artist);
   if (track.album) sub += (sub ? ' · ' : '') + esc(track.album);
@@ -32,28 +37,24 @@ function card(track) {
   return lines.join('\n');
 }
 
-function send(chat, track) {
-  dzg.messages.send(chat, card(track), { parse: 'html' });
-}
-
 function parseManual(text) {
   const m = text.split(/\s+[-–—]\s+/);
   if (m.length >= 2) return { artist: m[0].trim(), title: m.slice(1).join(' - ').trim() };
   return { artist: '', title: text.trim() };
 }
 
-function run(ctx, rest) {
+async function run(ctx, rest) {
   const chat = ctx.chat || ctx.peerId;
+  let track;
   if (rest) {
-    send(chat, parseManual(rest));
-    return;
-  }
-  let track = null;
-  try {
-    track = dzg.media.nowPlaying({ player: setting('player', 'spotify') });
-  } catch (e) {
-    dzg.ui.toast('Не прочитать плеер: ' + e, 'Сейчас играет');
-    return;
+    track = parseManual(rest);
+  } else {
+    try {
+      track = dzg.media.nowPlaying({ player: setting('player', 'spotify') });
+    } catch (e) {
+      dzg.ui.toast('Не прочитать плеер: ' + e, 'Сейчас играет');
+      return;
+    }
   }
   if (!track || !track.title) {
     dzg.ui.alert(
@@ -62,7 +63,13 @@ function run(ctx, rest) {
       'Сейчас играет');
     return;
   }
-  send(chat, track);
+  track.label = setting('label', 'Сейчас играет');
+  try {
+    const path = await dzg.media.renderCard(track);
+    dzg.messages.sendFile(chat, path, { caption: caption(track), parse: 'html', album: false });
+  } catch (e) {
+    dzg.messages.send(chat, textCard(track), { parse: 'html' });
+  }
 }
 
 dzg.messages.onBeforeSend((ctx) => {
