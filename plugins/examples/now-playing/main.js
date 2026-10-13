@@ -1,6 +1,7 @@
 // .музыка -> карточка «сейчас играет» в чат.
-// Источник — Last.fm (ник + бесплатный API-ключ в настройках).
+// Источник — локальный плеер через MPRIS (Spotify и любой другой).
 // Вручную: «.музыка Radiohead - Creep».
+// Точку-префикс и кириллицу слеш-команды не ловят — перехват через onBeforeSend.
 
 const setting = (key, fallback) => {
   const v = dzg.settings.get(key);
@@ -15,14 +16,19 @@ function card(track) {
   const label = setting('label', 'Сейчас играет');
   const lines = [];
   // Скрытая ссылка на обложку первой — Telegram покажет её картинкой-превью.
-  if (track.cover) lines.push(`<a href="${esc(track.cover)}">⁣</a>`);
+  if (track.cover && /^https?:\/\//i.test(track.cover)) {
+    lines.push(`<a href="${esc(track.cover)}">⁣</a>`);
+  }
   lines.push(`🎧 <b>${esc(label)}</b>`);
   lines.push('');
   lines.push(`<b>${esc(track.title)}</b>`);
   let sub = esc(track.artist);
   if (track.album) sub += (sub ? ' · ' : '') + esc(track.album);
   if (sub) lines.push(sub);
-  if (track.url) { lines.push(''); lines.push(`<a href="${esc(track.url)}">▶ Слушать</a>`); }
+  if (track.url && /^https?:\/\//i.test(track.url)) {
+    lines.push('');
+    lines.push(`<a href="${esc(track.url)}">▶ Слушать</a>`);
+  }
   return lines.join('\n');
 }
 
@@ -36,55 +42,25 @@ function parseManual(text) {
   return { artist: '', title: text.trim() };
 }
 
-async function lastfmNowPlaying() {
-  const user = setting('lastfmUser', '');
-  const key = setting('lastfmKey', '');
-  if (!user || !key) return null;
-  const url = 'https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks'
-    + '&user=' + encodeURIComponent(user)
-    + '&api_key=' + encodeURIComponent(key)
-    + '&format=json&limit=1&extended=1';
-  const res = await dzg.http.fetch(url);
-  const data = await res.json();
-  const t = data && data.recenttracks && data.recenttracks.track;
-  const track = Array.isArray(t) ? t[0] : t;
-  if (!track) return null;
-  const playing = track['@attr'] && track['@attr'].nowplaying === 'true';
-  const images = track.image || [];
-  const cover = (images[images.length - 1] || {})['#text'] || '';
-  return {
-    title: track.name || '',
-    artist: (track.artist && (track.artist.name || track.artist['#text'])) || '',
-    album: (track.album && track.album['#text']) || '',
-    url: track.url || '',
-    cover,
-    playing,
-  };
-}
-
-async function run(ctx, rest) {
+function run(ctx, rest) {
   const chat = ctx.chat || ctx.peerId;
   if (rest) {
     send(chat, parseManual(rest));
     return;
   }
-  let track;
+  let track = null;
   try {
-    track = await lastfmNowPlaying();
+    track = dzg.media.nowPlaying({ player: setting('player', 'spotify') });
   } catch (e) {
-    dzg.ui.toast('Last.fm недоступен: ' + e, 'Сейчас играет');
+    dzg.ui.toast('Не прочитать плеер: ' + e, 'Сейчас играет');
     return;
   }
-  if (!track) {
+  if (!track || !track.title) {
     dzg.ui.alert(
-      'Укажи ник и API-ключ Last.fm в настройках плагина (ключ бесплатно на last.fm/api), '
-      + 'или пиши вручную: ' + setting('trigger', '.музыка') + ' Исполнитель - Трек.',
+      'Не вижу, что играет. Запусти Spotify и включи трек — читаю через MPRIS. '
+      + 'Либо вручную: ' + setting('trigger', '.музыка') + ' Исполнитель - Трек.',
       'Сейчас играет');
     return;
-  }
-  if (!track.playing && setting('label', 'Сейчас играет') === 'Сейчас играет') {
-    track = Object.assign({}, track);
-    // ничего не меняем в тексте — просто отправим последнее прослушанное
   }
   send(chat, track);
 }
