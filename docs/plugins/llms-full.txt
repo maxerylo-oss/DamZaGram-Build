@@ -176,7 +176,7 @@ From the repo root (needs `out-qjs/qjs`, built from `Telegram/ThirdParty/quickjs
 ## Optional
 
 - [Full API dump for agents](docs/plugins/llms-full.txt): this file + all typings + reference, in one text file
-- [Example plugins](plugins/examples/): hello, anti-ads, text-tools, ui-playground, ui-showcase, chat-tools, fake-balance
+- [Example plugins](plugins/examples/): hello, anti-ads, text-tools, ui-playground, ui-showcase, chat-tools, fake-balance, gift-offer-bot, popup-text, now-playing
 
 
 # API reference (docs/plugins/reference.md)

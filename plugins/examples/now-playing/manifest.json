@@ -1,0 +1,13 @@
+{
+  "id": "now-playing",
+  "name": "Сейчас играет",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Команда .музыка отправляет в чат красивую карточку с тем, что ты слушаешь (через Last.fm). Можно и вручную: .музыка Исполнитель - Трек.",
+  "settings": [
+    { "key": "trigger", "type": "string", "title": "Команда", "default": ".музыка" },
+    { "key": "lastfmUser", "type": "string", "title": "Ник Last.fm", "default": "" },
+    { "key": "lastfmKey", "type": "string", "title": "API-ключ Last.fm (last.fm/api)", "default": "" },
+    { "key": "label", "type": "string", "title": "Заголовок карточки", "default": "Сейчас играет" }
+  ]
+}
