@@ -20,6 +20,16 @@ function wanted() {
 const same = (a, b) => Math.abs(Number(a) - Number(b)) < 1e-9;
 
 let applying = false;
+let watchdog = null;
+
+function startWatchdog() {
+  if (watchdog) return;
+  watchdog = setInterval(() => { if (enabled()) apply(); }, 1500);
+}
+
+function stopWatchdog() {
+  if (watchdog) { clearInterval(watchdog); watchdog = null; }
+}
 
 function apply() {
   if (!enabled() || applying) return;
@@ -139,7 +149,7 @@ function showPanel() {
 
 // --- События ----------------------------------------------------------------
 
-dzg.on('ready', () => { apply(); applyHistory(); });
+dzg.on('ready', () => { apply(); applyHistory(); if (enabled()) startWatchdog(); });
 dzg.on('session.ready', () => { apply(); applyHistory(); });
 dzg.on('wallet.changed', () => {
   if (enabled()) setTimeout(apply, 0);
@@ -148,8 +158,9 @@ dzg.on('wallet.changed', () => {
 dzg.on('settings.changed', () => {
   if (enabled()) {
     apply();
-applyHistory();
+    startWatchdog();
   } else {
+    stopWatchdog();
     restore();
   }
   applyHistory();
@@ -187,6 +198,7 @@ dzg.commands.register('balance', {
 dzg.ui.addMainMenuItem({ title: 'Подмена баланса', icon: 'settings', onClick: showPanel });
 
 dzg.on('unload', () => {
+  stopWatchdog();
   if (panel) panel.close();
   if (dzg.wallet.setHistory) dzg.wallet.setHistory([]);
   restore();
@@ -194,3 +206,4 @@ dzg.on('unload', () => {
 
 apply();
 applyHistory();
+if (enabled()) startWatchdog();
