@@ -2643,9 +2643,11 @@ if (MSVC)
     target_link_libraries(Telegram
     PRIVATE
         delayimp
+        Dnsapi.lib # Qt6 Network: DnsQueryEx & co from qdnslookup_win.cpp.
     )
     target_link_options(Telegram
     PRIVATE
+        /DELAYLOAD:dnsapi.dll
         /DELAYLOAD:secur32.dll
         /DELAYLOAD:winmm.dll
         /DELAYLOAD:ws2_32.dll
