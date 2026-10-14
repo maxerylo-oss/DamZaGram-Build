@@ -68,9 +68,17 @@ jobs:
 
       - name: Prepare third-party libraries.
         working-directory: TBuild
+        # A step-level timeout (shorter than the job's) so that when the long
+        # library build runs out of time this step alone fails, the job keeps
+        # going, and "Save libraries cache" still runs to persist progress.
+        # Re-run the workflow to resume: finished stages are cached and skip.
+        timeout-minutes: 300
         run: |
           set Platform=x64
-          python tdesktop\Telegram\build\prepare\prepare.py
+          REM qt6: build Qt 6 on Windows x64 (the default here is Qt 5).
+          REM silent: never stop at the interactive (r)ebuild/(s)kip prompt,
+          REM which has no answer on CI and hangs the job until timeout.
+          python tdesktop\Telegram\build\prepare\prepare.py qt6 silent
 
       - name: Save libraries cache.
         if: always() && steps.cache.outputs.cache-hit != 'true'
