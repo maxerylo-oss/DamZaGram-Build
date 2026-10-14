@@ -93,7 +93,9 @@ jobs:
         working-directory: TBuild/tdesktop/Telegram
         run: |
           set Platform=x64
-          configure.bat x64 ^
+          REM qt6: configure against the Qt 6 we built (default here is Qt 5,
+          REM which cmake then fails to find). configure.py strips it for cmake.
+          configure.bat x64 qt6 ^
             -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
             -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
             -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON
