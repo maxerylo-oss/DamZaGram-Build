@@ -58,6 +58,17 @@ include(cmake/validate_d3d_compiler.cmake)
 include(cmake/target_prepare_qrc.cmake)
 
 include(cmake/options.cmake)
+
+# DamZaGram: optional cap on MSVC /MP workers. cmake/options_win.cmake passes
+# a bare /MP (one cl.exe worker per core), which runs 16 GB CI runners out of
+# heap (C1060) on the heavy template units. -D DESKTOP_APP_MP_COUNT=N -> /MPN.
+if (MSVC AND DESKTOP_APP_MP_COUNT)
+    get_target_property(dzg_common_opts common_options INTERFACE_COMPILE_OPTIONS)
+    list(TRANSFORM dzg_common_opts REPLACE "^/MP$" "/MP${DESKTOP_APP_MP_COUNT}")
+    set_target_properties(common_options PROPERTIES
+        INTERFACE_COMPILE_OPTIONS "${dzg_common_opts}")
+endif()
+
 include(cmake/external/qt/package.cmake)
 
 set(desktop_app_skip_libs

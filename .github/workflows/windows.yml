@@ -14,8 +14,10 @@ on:
       config:
         description: Build configuration
         type: choice
-        default: Release
-        options: [Release, Debug]
+        # Debug: no optimizer, so it compiles faster and needs far less memory
+        # per file; Release runs the free 16 GB runner out of heap (C1060).
+        default: Debug
+        options: [Debug, Release]
 
 concurrency:
   group: windows
@@ -108,16 +110,16 @@ jobs:
           configure.bat x64 qt6 ^
             -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
             -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
-            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
+            -D DESKTOP_APP_MP_COUNT=3
 
       - name: Build DamZaGram.
         working-directory: TBuild/tdesktop
         run: |
           set Platform=x64
-          REM Cap compiler parallelism: 4 cl.exe each loading the huge Qt6 PCH
-          REM exhaust the runner's 16 GB RAM -> C3859/C1076 (PCH out of memory).
-          REM Two at a time fits; slower but it actually finishes.
-          cmake --build out --config ${{ inputs.config }} --target Telegram -- /m:1 /p:CL_MPCount=2
+          REM One project at a time; inside it cl.exe runs 3 workers
+          REM (/MP3 via DESKTOP_APP_MP_COUNT at configure) to stay in memory.
+          cmake --build out --config ${{ inputs.config }} --target Telegram -- /m:1
 
       - name: Collect the build.
         if: success()
