@@ -1,0 +1,8 @@
+{
+  "id": "reactions-total",
+  "name": "Reactions Total",
+  "version": "1.0.0",
+  "author": "@wetakush",
+  "description": "Добавляет суммарное количество реакций в строку под постом, рядом с просмотрами и пересылками. Работает пассивно.",
+  "settings": []
+}

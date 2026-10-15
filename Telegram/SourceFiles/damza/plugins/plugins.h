@@ -77,4 +77,8 @@ void InjectCreditsHistory(
 	bool in,
 	bool out);
 
+// True if a plugin asked to show the total reaction count in the bottom
+// info line, next to views and forwards. See dzg.reactions.showTotal.
+[[nodiscard]] bool ShowReactionsTotal();
+
 } // namespace Damza::Plugins

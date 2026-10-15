@@ -32,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_session.h"
 #include "data/data_message_reactions.h"
+#include "damza/plugins/plugins.h"
 #include "window/window_session_controller.h"
 #include "styles/style_chat.h"
 #include "styles/style_credits.h"
@@ -669,9 +670,15 @@ void BottomInfo::layoutViewsText() {
 		_views.clear();
 		return;
 	}
+	auto text = Lang::FormatCountToShort(std::max(*_data.views, 1)).string;
+	if (_data.reactionsTotal > 0) {
+		// DamZaGram: total reactions next to the views count. U+2665.
+		text += QString::fromUtf8(" \xe2\x99\xa5 ")
+			+ Lang::FormatCountToShort(_data.reactionsTotal).string;
+	}
 	_views.setText(
 		st::msgDateTextStyle,
-		Lang::FormatCountToShort(std::max(*_data.views, 1)).string,
+		text,
 		Ui::NameTextOptions());
 }
 
@@ -822,6 +829,13 @@ BottomInfo::Data BottomInfoDataFromMessage(not_null<Message*> message) {
 		if (views->forwardsCount > 0) {
 			result.forwardsCount = views->forwardsCount;
 		}
+	}
+	if (Damza::Plugins::ShowReactionsTotal()) {
+		auto total = 0;
+		for (const auto &reaction : item->reactions()) {
+			total += reaction.count;
+		}
+		result.reactionsTotal = total;
 	}
 	if (item->isSending() || item->hasFailed()) {
 		result.flags |= Flag::Sending;

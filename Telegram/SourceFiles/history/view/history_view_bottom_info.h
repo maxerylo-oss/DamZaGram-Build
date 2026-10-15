@@ -64,6 +64,7 @@ public:
 		std::optional<int> views;
 		std::optional<int> replies;
 		std::optional<int> forwardsCount;
+		int reactionsTotal = 0; // DamZaGram: dzg.reactions.showTotal.
 		Flags flags;
 	};
 	BottomInfo(not_null<::Data::Reactions*> reactionsOwner, Data &&data);
