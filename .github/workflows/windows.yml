@@ -55,6 +55,16 @@ jobs:
         with:
           arch: x64
 
+      # The runner has 16 GB RAM and a tiny pagefile; compiling tdesktop's
+      # heavy template units runs cl.exe out of commit space (error C1060).
+      # A large pagefile gives it the virtual memory it needs.
+      - name: Enlarge the pagefile.
+        uses: al-cheb/configure-pagefile-action@v1.4
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "D:"
+
       - name: Restore cached libraries.
         id: cache
         uses: actions/cache/restore@v4
